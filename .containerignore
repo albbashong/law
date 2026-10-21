@@ -1,0 +1,13 @@
+# 이미지에는 코드와 설정만 — 데이터·키·가상환경·로그는 넣지 않는다
+.git
+.env
+**/.env
+.venv
+**/.venv
+data
+logs
+eval/results
+.superpowers
+.pytest_cache
+**/__pycache__
+**/*.pyc

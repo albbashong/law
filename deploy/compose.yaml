@@ -1,0 +1,44 @@
+# 개발 서버 배포 — podman compose(또는 podman-compose)로 deploy/ 에서 실행한다.
+#   cd deploy && podman compose up -d --build
+# 준비물(README.md 참고): LAW_DATA_DIR 에 lawdb.sqlite, deploy/law-mcp.env, deploy/agent.env
+name: permit-law
+
+services:
+  law-mcp:
+    build: {context: .., dockerfile: deploy/law-mcp.Containerfile}
+    image: localhost/law-mcp:latest
+    environment:
+      LAW_MCP_TRACE_FILE: /logs/law_mcp_trace.jsonl
+    volumes:
+      # 설정은 .env 파일 그대로 마운트(pydantic 이 읽는다) — compose env_file 은 따옴표·정규식 처리가 구현마다 달라 쓰지 않는다
+      - ./law-mcp.env:/app/.env:ro,z
+      - ${LAW_DATA_DIR:-../data}:/data:ro,z
+      - logs:/logs
+    ports: ["${LAW_MCP_PORT:-7017}:7017"]
+    restart: unless-stopped
+
+  law-review:
+    build: {context: .., dockerfile: deploy/agent.Containerfile}
+    image: localhost/law-review:latest
+    environment:
+      MCP_SERVERS: '{"law": "http://law-mcp:7017/mcp"}'    # agent.env 의 localhost 값보다 우선
+    volumes:
+      - ./agent.env:/app/agent/law_review/.env:ro,z
+    depends_on: [law-mcp]
+    ports: ["${LAW_REVIEW_PORT:-7016}:7016"]
+    restart: unless-stopped
+
+  playground:
+    # podman-compose 는 다른 서비스의 빌드를 기다리지 않으므로 같은 빌드를 둔다(층이 캐시돼 다시 빌드하지 않는다)
+    build: {context: .., dockerfile: deploy/agent.Containerfile}
+    image: localhost/law-review:latest
+    depends_on: [law-review]
+    command: ["python", "/app/eval/playground.py", "--host", "0.0.0.0", "--port", "7018",
+              "--agent", "http://law-review:7016", "--trace", "/logs/law_mcp_trace.jsonl"]
+    volumes:
+      - logs:/logs:ro
+    ports: ["${PLAYGROUND_PORT:-7018}:7018"]
+    restart: unless-stopped
+
+volumes:
+  logs:

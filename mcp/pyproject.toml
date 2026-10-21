@@ -1,0 +1,30 @@
+[project]
+name = "law-mcp"
+version = "0.1.0"
+description = "법령·조례·별표를 따라가며 인허가 근거를 찾는 MCP 서버 (공식 mcp SDK v2, streamable HTTP)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.0.0,<3",
+    "uvicorn>=0.31.1",
+    "httpx>=0.28",
+    "pydantic-settings>=2.14",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+law-mcp = "law_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=1.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", ".."]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/law_mcp"]

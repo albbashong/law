@@ -1,0 +1,234 @@
+# law_review 골든셋. must_refs 는 lawdb 원문으로 확인한 필수 근거(법령명 정확히, 조문은 접두 일치).
+# expect_basis: building_basis 근거상태. expect_state: 태스크 최종 상태(기본 COMPLETED).
+# 분류: addr=주소만 담긴 독립 질의, zone=시군구+용도지역, follow=따라가기, edge=경계·되묻기, story=쉬운 설명(여러 턴)
+# turns: 여러 턴 대화(마지막 답을 채점). must_mention: 마지막 답에 있어야 할 문구. expect_prefix: 마지막 답의 시작.
+
+- id: G01
+  kind: addr
+  utterance: "경상북도 영천시 금호읍 신월리 1-51에 공장 지을 수 있어?"
+  expect_basis: 조건부_허용   # 조례 별표 16 제15호는 공장 중 열거 업종만
+  must_refs:
+    - {law: "영천시 도시계획 조례", article: "별표 16 제15호"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제2호 차목"}
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제76조"}
+    - {law: "영천시 도시계획 조례", article: "제56조"}
+
+- id: G02
+  kind: addr
+  utterance: "경상북도 영천시 금호읍 신월리 1-51에 단독주택 지으려는데 건폐율이랑 근거 조문 알려줘"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제1호 가목"}
+    - {law: "영천시 도시계획 조례", article: "제56조"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "제84조"}
+
+- id: G03
+  kind: addr
+  utterance: "경상북도 경산시 남매로 159 부지에 숙박시설 지을 수 있나요?"
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 9"}
+
+- id: G04
+  kind: addr
+  utterance: "영천시 금호읍 신월리 1-51 땅 용도지역이 뭐고 농지전용허가 받아야 해?"
+  must_refs:
+    - {law: "농지법", article: "제34조"}
+
+- id: G05
+  kind: addr
+  utterance: "경상북도 영천시 금호읍 신월리 1-51에 카페 열 수 있을까?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제1호 나목"}
+
+- id: G06
+  kind: zone
+  utterance: "영천시 자연녹지지역에 위락시설 지을 수 있어?"
+  expect_basis: 미열거
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17"}
+
+- id: G07
+  kind: zone
+  utterance: "경산시 계획관리지역에 공장 지으려고 하는데 근거 법령 알려줘"
+  expect_basis: 조건부_제한
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 20 제1호 자목"}
+
+- id: G08
+  kind: zone
+  utterance: "예천군 생산관리지역에 창고 지을 수 있어?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 19 제1호 마목"}
+
+- id: G09
+  kind: zone
+  utterance: "서울 강남구 자연녹지지역에 단독주택 지을 때 건폐율은?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "서울특별시 도시계획 조례", article: "제44조"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제1호 가목"}
+
+- id: G10
+  kind: zone
+  utterance: "부산 해운대구 제1종일반주거지역에 카페 열 수 있어?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 4 제1호 다목"}
+
+- id: G11
+  kind: follow
+  utterance: "국토계획법 시행령 제84조 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있어?"
+  must_refs:
+    - {law: "영천시 도시계획 조례", article: "제56조"}
+
+- id: G12
+  kind: follow
+  utterance: "영천시 도시계획 조례 제56조의 상위 근거 법령이 뭐야?"
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "제84조"}
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제77조"}
+
+- id: G13
+  kind: follow
+  utterance: "건축법 제11조 건축허가에서 대통령령으로 정한 내용이 뭐야? 하위 법령 조문까지 찾아줘"
+  must_refs:
+    - {law: "건축법", article: "제11조"}
+    - {law: "건축법 시행령", article: "제8조"}
+
+- id: G14
+  kind: follow
+  utterance: "영천시에서 가축 사육 제한 거리는 어느 조례에 있어?"
+  must_refs:
+    - {law: "영천시 가축사육제한에 관한 조례", article: ""}   # 조문 무관, 조례를 찾았는지
+
+- id: G15
+  kind: edge
+  utterance: "중구 자연녹지지역에 창고 지어도 돼?"
+  expect_state: INPUT_REQUIRED
+
+# --- 최종 리뷰 반영: 한 용도가 여러 구분에 걸치는 경우, 일반구 ---
+- id: G16
+  kind: zone
+  utterance: "영천시 자연녹지지역에 일반음식점 낼 수 있어?"
+  expect_basis: 조례_허용
+  must_refs:
+    - {law: "영천시 도시계획 조례", article: "별표 16 제4호"}
+
+- id: G17
+  kind: zone
+  utterance: "영천시 계획관리지역에 제2종 근린생활시설 지을 수 있나?"
+  expect_basis: 조건부_제한
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 20 제1호 라목"}
+
+- id: G18
+  kind: zone
+  utterance: "영천시 준주거지역에 판매시설 가능해?"
+  expect_basis: 조건부_제한
+  must_refs:
+    - {law: "영천시 도시계획 조례", article: "별표 6 제2호"}
+
+- id: G19
+  kind: zone
+  utterance: "포항시 북구 자연녹지지역에 단독주택 지을 때 건폐율은?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제1호 가목"}
+
+# --- 영천 편중 완화: 다른 시군·용도 (2026-10-20, 원문 대조) ---
+- id: G20
+  kind: zone
+  utterance: "전주시 제1종전용주거지역에 다가구주택 지을 수 있어?"
+  expect_basis: 조례_허용
+  must_refs:
+    - {law: "전주시 도시계획 조례", article: "별표 1 제1호"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 2 제2호 가목"}
+
+- id: G21
+  kind: zone
+  utterance: "청주시 자연녹지지역 임야에 주유소 지으려면 근거 법령이랑 필요한 허가가 뭐야?"
+  expect_basis: 조례_허용
+  must_refs:
+    - {law: "청주시 도시계획 조례", article: "제36조제2호차목"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제2호 타목"}
+    - {law: "산지관리법", article: "제14조"}
+
+- id: G22
+  kind: zone
+  utterance: "천안시 자연녹지지역에 공장 지을 수 있어?"
+  expect_basis: 조건부_허용
+  must_refs:
+    - {law: "천안시 도시계획 조례", article: "별표 17 제2호 차목"}
+
+- id: G23
+  kind: zone
+  utterance: "김해시 계획관리지역 논에 축사 지으려면 어떤 법을 봐야 해?"
+  expect_basis: 시행령_허용
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 20"}
+    - {law: "농지법", article: "제34조"}
+
+- id: G24
+  kind: zone
+  utterance: "강릉시 계획관리지역에 일반숙박시설 지을 수 있어?"
+  expect_basis: 조건부_제한
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 20 제1호 사목"}
+
+# --- 일반 질의: 정의·의제·비교 (2026-10-20) ---
+- id: G25
+  kind: general
+  utterance: "건축허가를 받으면 개발행위허가를 따로 받아야 해? 왜 그런지 근거도 알려줘"
+  must_refs:
+    - {law: "건축법", article: "제11조"}
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제56조"}
+
+- id: G26
+  kind: general
+  utterance: "용도지역이랑 용도지구 차이가 뭐야?"
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제2조제15호"}
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제2조제16호"}
+
+- id: G27
+  kind: general
+  utterance: "농지전용허가랑 개발행위허가는 뭐가 달라?"
+  must_refs:
+    - {law: "농지법", article: "제34조"}
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제56조"}
+
+- id: G28
+  kind: general
+  utterance: "개발행위가 뭐야?"
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제56조"}
+
+- id: G29
+  kind: general
+  utterance: "성장관리계획이 뭐야?"
+  must_refs:
+    - {law: "국토의 계획 및 이용에 관한 법률", article: "제2조제5의3호"}
+
+- id: S01
+  kind: story
+  turns:
+    - "영천시 자연녹지지역에 공장 지을 수 있어?"
+    - "쉽게 예시로 설명해줘"
+  expect_prefix: "예를 들어"
+  must_mention: ["공장설립", "개발행위", "4층", "건폐율"]   # 앞 답의 조건·다른 허가가 이야기에도 이어지는가
+  must_refs:
+    - {law: "영천시 도시계획 조례", article: "별표 16 제15호"}
+    - {law: "국토의 계획 및 이용에 관한 법률 시행령", article: "별표 17 제2호 차목"}
+
+- id: S02
+  kind: story
+  turns:
+    - "수의계약은 어떤 조건에서 할 수 있어?"
+    - "금액은?"
+    - "예시 줘봐"
+  expect_prefix: "예를 들어"
+  must_mention: ["추정가격"]
+  must_refs:
+    - {law: "지방자치단체를 당사자로 하는 계약에 관한 법률 시행령", article: "제25조"}

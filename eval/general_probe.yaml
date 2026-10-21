@@ -1,0 +1,17 @@
+# 인허가 밖 일반 법령 질문 점검 — 사람이 읽고 맞는 법령·기준을 짚는지 본다.
+#   python3 eval/run_eval.py --golden eval/general_probe.yaml
+- id: X01
+  kind: general
+  utterance: "내가 공무원한테 밥을 3만원 이상 사주거나 하면 법에 위배됨?"
+  must_refs:
+    - {law: "부정청탁 및 금품등 수수의 금지에 관한 법률 시행령", article: "별표 1"}
+- id: X02
+  kind: general
+  utterance: "공무원 출장에서 점심을 5만원짜리 먹으면 법에 어긋나?"
+  must_refs:
+    - {law: "공무원 여비 규정", article: "별표 2"}
+- id: X03
+  kind: general
+  utterance: "공무원한테 선물은 얼마까지 줄 수 있어?"
+  must_refs:
+    - {law: "부정청탁 및 금품등 수수의 금지에 관한 법률 시행령", article: "별표 1"}

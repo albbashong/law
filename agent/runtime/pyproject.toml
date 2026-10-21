@@ -1,0 +1,30 @@
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "공용 에이전트 런타임 — 설정 디렉터리로 에이전트를 갈아끼운다"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "fastmcp>=3.3.1,<4",
+    "openai>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=1.0.0", "ruff>=0.9.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
