@@ -133,6 +133,22 @@ class Settings(BaseSettings):
     answer_strip_pattern: str = Field(
         default="", description="최종 답변에서 지울 표기의 정규식(예: 모델이 본문에 흘린 도구 호출 표기). 비우면 그대로 둔다.")
 
+    answer_review_prompt: str = Field(
+        default="", description="답 점검 지시 파일(AGENT_DIR 기준). 인용·수치 검증을 통과한 답을 조회 원문과 대조해 JSON "
+        "{ANSWER_REVIEW_KEY: [고칠 점]} 으로 답하게 하고, 고칠 점이 있으면 한 번 되돌린다. 비우면 점검하지 않는다.")
+    answer_review_scope: str = Field(
+        default="follow_up_or_general", description="점검할 답. all: 모든 답. follow_up_or_general: 이어지는 질문의 답과 "
+        "분야 도구(분야 지침의 '도구:')를 부르지 않은 답만 — 분야 도구가 근거를 짜 준 첫 턴 답은 점검하지 않는다.")
+    answer_review_key: str = Field(default="문제", description="점검 답 JSON 에서 고칠 점 목록의 키.")
+    answer_review_request_text: str = Field(
+        default="[질문]\n{question}\n\n[답]\n{answer}\n\n[조회 원문]\n{sources}",
+        description="답 점검에 넘기는 사용자 메시지 틀.")
+    answer_review_retry_text: str = Field(
+        default="답을 조회 원문과 대조했더니 다음 문제가 있었습니다. 원문 근거로 고쳐 처음부터 다시 답하세요(필요하면 더 "
+        "조회). 고칠 점과 관계없는 근거 조문 인용은 그대로 둡니다. 점검이 있었다는 말이나 앞 답과 "
+        "달라진 점은 답에 쓰지 않습니다.\n{problems}",
+        description="점검에서 나온 고칠 점을 모델에 되돌리는 문장.")
+
     # ── 도구 인자 검증. 어느 인자가 "사용자가 말한 값"이어야 하는지는 에이전트 영역이라 설정이 정한다.
     answer_rate_check: bool = Field(
         default=False, description="답에 쓴 비율(%, N분의 M, 1/N)이 이번 조회 원문의 비율 값과 맞는지 대조한다(값 비교).")
@@ -184,6 +200,11 @@ class Settings(BaseSettings):
         default=30000, description="이야기 단계에 넘기는 조회 원문 상한(자). 넘으면 뒤를 자른다.")
     story_format_pattern: str = Field(
         default="", description="이야기가 맞춰야 할 형식(정규식, 처음부터 검사). 비우면 검사하지 않는다.")
+    domains_dir: str = Field(
+        default="", description="분야 지침 폴더(AGENT_DIR 기준). 파일 머리의 '법령:'·'도구:' 줄과 '---' 아래 지침 — 모델이 그 법령을 "
+        "열거나(호출 인자) 그 도구를 부르면 공통 프롬프트 뒤에 지침을 붙인다. 비우면 쓰지 않는다.")
+    domain_law_keys: str = Field(default="law", description="호출 인자에서 법령명을 읽을 키(쉼표 구분).")
+    domain_heading: str = Field(default="\n\n## 분야 지침 — {name}\n{body}", description="분야 지침을 붙이는 꼴.")
     story_forms_dir: str = Field(
         default="", description="설명틀 디렉터리(AGENT_DIR 기준). 파일(*.txt)마다 첫 줄은 고르는 기준, 나머지는 쓰는 법. "
         "정하면 retell_as_story 에 form 인자(파일 이름 중 하나)를 주고, 고른 틀을 지시문의 {설명틀}·{설명틀_쓰는법}에 채운다.")

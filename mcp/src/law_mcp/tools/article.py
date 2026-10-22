@@ -40,6 +40,10 @@ def resolve_region(store, region: str | None):
     return rows[0], None
 
 
+SIBLING_CHARS = 60   # 다른 항목 첫머리 길이
+SIBLINGS_MAX = 20
+
+
 def run_law_article(store, law: str, article: str, region: str | None = None,
                     chain: str = "up", depth: int | None = None) -> dict:
     s = get_settings()
@@ -66,6 +70,16 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     facts = {"법령": doc["name"], "조문": start.article, "제목": start.title,
              "원문": excerpt(body, ORIGINAL_MAX),
              "호출인자": {"law": doc["name"], "article": start.article}}   # 검색 결과와 같은 모양 — 이 조문 자신
+    if not path.startswith("별표") and "/" in path:   # 항·호 하나만 열었을 때 — 위로 올라가며 각 단계의 다른 항목 첫머리
+        near, cur = [], path
+        while "/" in cur:
+            parent = cur.rsplit("/", 1)[0]
+            near += [f"{u['label']}: {excerpt(u['text'] or '', SIBLING_CHARS)}" for u in store._all(
+                "SELECT label, text FROM unit WHERE doc_id=? AND parent_path=? AND path<>? ORDER BY unit_id",
+                (doc["doc_id"], parent, cur))]
+            cur = parent
+        if near:
+            facts["같은_조_다른_항목"] = near[:SIBLINGS_MAX]
     names = store.aliases(doc["doc_id"])
     if names:   # 답에 약칭을 써도 조회 결과로 확인된다
         facts["약칭"] = names

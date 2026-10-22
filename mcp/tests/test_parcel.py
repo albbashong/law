@@ -127,3 +127,17 @@ def test_unavailable_message_names_endpoint():
     c = vworld.Client("k", transport=httpx.MockTransport(handler), retry_wait=0)
     with pytest.raises(vworld.VworldUnavailable, match="/req/address"):
         c.lookup("x")
+
+
+def test_lookup_reads_road_side_and_legal_dong(mock_vworld):
+    """대지와 도로의 관계(건축법 제44조)와 그 적용 지역(제3조제2항: 읍·면·동)을 판단할 사실."""
+    p = mock_vworld.lookup("경상북도 영천시 금호읍 신월리 1-51")
+    assert p.road_side == "세로한면(가)" and p.legal_dong == "경상북도 영천시 금호읍 신월리"
+    r = run_parcel_zoning("경상북도 영천시 금호읍 신월리 1-51", lookup=mock_vworld.lookup)
+    assert r["facts"]["도로접면"] == "세로한면(가)" and r["facts"]["법정동"] == "경상북도 영천시 금호읍 신월리"
+
+
+def test_road_side_missing_is_left_out():
+    c = vworld.Client("k", transport=_transport(landchar="vworld_landchar_denied.json"), retry_wait=0)
+    r = run_parcel_zoning("경상북도 영천시 금호읍 신월리 1-51", lookup=c.lookup)
+    assert "도로접면" not in r["facts"]

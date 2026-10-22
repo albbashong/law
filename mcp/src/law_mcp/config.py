@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     mcp_allowed_origins: list[str] = []
     vworld_api_key: str = ""
     vworld_timeout: float = 10.0
+    vworld_retries: int = 15          # 정상 키에도 INCORRECT_KEY 가 자주(관측 약 65%) 와서 넉넉히 다시 묻는다
+    vworld_retry_wait: float = 0.2    # 다시 묻기 사이 대기(초) — 늘어나되 1초를 넘지 않는다
 
 
 def get_settings() -> Settings:

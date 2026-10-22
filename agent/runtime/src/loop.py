@@ -83,6 +83,42 @@ def story_forms() -> dict[str, tuple[str, str]]:
     return out
 
 
+def domains() -> dict[str, tuple[list[str], list[str], str]]:
+    """분야 이름 → (켜는 법령명들, 켜는 도구들, 지침). DOMAINS_DIR 이 없으면 빈 dict."""
+    if not settings.domains_dir:
+        return {}
+    out = {}
+    for f in sorted((AGENT_DIR / settings.domains_dir).glob("*.txt")):
+        head, _, body = f.read_text(encoding="utf-8").partition("\n---\n")
+        heads = dict(line.split(":", 1) for line in head.splitlines() if ":" in line)
+        names = lambda k: [x.strip() for x in heads.get(k, "").split(",") if x.strip()]   # noqa: E731
+        out[f.stem] = (names("법령"), names("도구"), body.strip())
+    return out
+
+
+def active_domains(calls: list[dict[str, Any]]) -> list[str]:
+    """이번까지의 호출(모델이 연 법령·부른 도구)로 켜지는 분야 — 시행령·시행규칙은 법률 이름으로 시작한다."""
+    keys = [k.strip() for k in settings.domain_law_keys.split(",") if k.strip()]
+    tools = {c.get("tool") for c in calls}
+    laws = [re.sub(r"\s+", "", v) for c in calls for k in keys
+            if isinstance(v := (c.get("args") or {}).get(k), str)]
+    return [name for name, (dlaws, dtools, _) in domains().items()
+            if tools & set(dtools) or any(x.startswith(re.sub(r"\s+", "", d)) for d in dlaws for x in laws)]
+
+
+def review_wanted(follow_up: bool, calls: list[dict[str, Any]]) -> bool:
+    """답 점검 대상인가 — follow_up_or_general 이면 이어지는 질문이거나 분야 도구 없이 법령을 직접 연 답만."""
+    if settings.answer_review_scope == "all" or follow_up:
+        return True
+    tools = {t for _, dtools, _ in domains().values() for t in dtools}
+    return not any(c.get("tool") in tools for c in calls)
+
+
+def with_domains(system_prompt: str, names: list[str]) -> str:
+    table = domains()
+    return system_prompt + "".join(settings.domain_heading.format(name=n, body=table[n][2]) for n in names)
+
+
 def story_tool() -> dict[str, Any]:
     forms = story_forms()
     if not forms:
@@ -465,15 +501,29 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
     return answer
 
 
-def review_problems(text: str) -> list[str]:
+def review_problems(text: str, key: str | None = None) -> list[str]:
     """점검 답 → 고칠 점 목록. 읽을 수 없으면 빈 목록(점검이 막지 않는다)."""
     start, end = text.find("{"), text.rfind("}")
     try:
         data = json.loads(text[start:end + 1]) if 0 <= start < end else {}
     except ValueError:
         return []
-    items = data.get(settings.story_review_key) if isinstance(data, dict) else None
+    items = data.get(key or settings.story_review_key) if isinstance(data, dict) else None
     return [str(x) for x in items if str(x).strip()] if isinstance(items, list) else []
+
+
+async def answer_review(model: "ModelAdapter", question: str, answer: str, messages: list[dict[str, Any]],
+                        usage_total: dict[str, int]) -> list[str]:
+    """ANSWER_REVIEW_PROMPT 로 답을 조회 원문과 대조한 고칠 점. 조회가 없거나 프롬프트가 없으면 빈 목록."""
+    sources = story_sources(messages)
+    if not settings.answer_review_prompt or not sources:
+        return []
+    prompt = (AGENT_DIR / settings.answer_review_prompt).read_text(encoding="utf-8")
+    step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content":
+                                  settings.answer_review_request_text.format(question=question, answer=answer, sources=sources)}], [])
+    for k in ("tokens_in", "tokens_out"):
+        usage_total[k] += (step.get("usage") or {}).get(k) or 0
+    return review_problems((step.get("answer") or "").strip(), settings.answer_review_key)
 
 
 def checked_plan(text: str, sources: str, messages: list[dict[str, Any]],
@@ -643,12 +693,20 @@ async def run_query(
         for label, exc in (report_dead() if callable(report_dead) else {}).items():
             failures.append(_failure(label, McpUnavailable(label, exc), 1))
 
-        cite_checked = False
+        cite_checked = reviewed = False
         story_wanted = replayed = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
         cite_notes: tuple[str, ...] = (work,) if work else ()
+        opened: list[dict[str, Any]] = list(last_calls(context)) if work else []   # 앞 턴에 연 법령도 분야를 켠다
+        shown: list[str] = []
         for round_idx in range(rounds_max):
+            # 분야 지침 — 모델이 연 법령·부른 도구에 맞는 지침을 공통 프롬프트 뒤에 붙인다
+            on = active_domains(opened + calls_made)
+            if on != shown:
+                logger.info("domains: %s", on)
+                shown = on
+            messages[0] = {"role": "system", "content": with_domains(system_prompt, on)}
             step = await model.next_step(messages, tools)
             step_usage = step.get("usage") or {}
             usage_total["tokens_in"] += step_usage.get("tokens_in") or 0
@@ -670,6 +728,18 @@ async def run_query(
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
                     continue
+                # 점검 — 원문과 대조해 고칠 점이 나오면 한 번 되돌린다(인용·수치가 걸린 답은 점검하지 않는다)
+                if (not (bad or off) and not reviewed and round_idx + 1 < rounds_max
+                        and review_wanted(bool(work), calls_made)):
+                    reviewed = True
+                    problems = await answer_review(model, query, step["answer"], messages, usage_total)
+                    if problems:
+                        logger.info("answer review: %s", problems)
+                        messages.append({"role": "assistant", "content": step["answer"]})
+                        note = settings.answer_review_retry_text.format(problems="\n".join(f"- {p}" for p in problems))
+                        cite_notes += (note,)
+                        messages.append({"role": "user", "content": note})
+                        continue
                 answer = clean_answer(step["answer"])
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:

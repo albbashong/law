@@ -7,7 +7,7 @@ from pydantic import Field
 from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.follow import Ref, follow, node
-from law_mcp.engine.permits import development_permit, land_permits, permits_for_term
+from law_mcp.engine.permits import development_permit, land_permits, permits_for_term, road_access
 from law_mcp.engine.rules import find_items, header_of, is_partial_item, normalize_zone, section_kind, subtype_cover
 from law_mcp.engine.uses import facility_term, match_use, names as use_names
 from law_mcp.tools.article import resolve_region
@@ -104,8 +104,10 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     if not uses:
         return result("failed", {"용도목록": use_names(store)},
                       f"'{use}'는 건축법 시행령 별표 1 원문에 나오는 용도명·시설명이 아닙니다."
-                      " 사용자에게 묻기 전에, 표현의 일반적인 뜻에 가장 가까운 용도명을 용도목록에서 골라 바로 다시"
-                      " 호출하세요. 답변에는 어느 용도로 해석했는지 밝히세요.")
+                      " 사용자에게 묻기 전에, 표현의 일반적인 뜻에 가장 가까운 것을 용도목록(호 이름: 목 번호 시설명)에서"
+                      " 하나 골라, 그 번호를 '제3호나목'처럼 호·목 번호로(목이 없으면 호 번호만) use 에 넣어 바로 다시"
+                      " 호출하세요. 용도목록은 고르기 위한 것일 뿐 지을 수 있는지의 근거가 아니므로, 다시 호출한 결과로 답하세요."
+                      " 답변에는 어느 용도로 해석했는지 밝히세요.")
     ho, uname = uses[0]["ho"], uses[0]["name"]
     mm = re.search(r"([가-하])목$", uses[0]["label"])
     mok = mm.group(1) if mm else None              # 목 단위로 물었으면(일반음식점 = 제4호 자목) 목 단위로 본다
@@ -237,6 +239,13 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         chain.append(dp)
         extra.append(f"{dp.title}({dp.law} {dp.article}) 대상 여부")
 
+    road = (parcel_facts or {}).get("도로접면")
+    if road:   # 접도 기준 — 도로접면은 토지특성 분류일 뿐이라 기준 조문과 적용 제외를 함께 본다
+        for r in road_access(store):
+            r.note = f"대지와 도로 — {r.title} (도로접면: {road}, 토지특성)"
+            chain.append(r)
+            extra.append(f"{r.title}({r.law} {r.article}) — 도로접면: {road}(토지특성)")
+
     # 중복 제거 후 예산 안에 담기
     seen, ordered = set(), []
     for r in refs + chain:
@@ -249,7 +258,8 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
              "근거상태": verdict, "근거상태_설명": EXPLAIN[verdict], "조건": conditions[:8], "건폐율": ratios["건폐율"], "용적률": ratios["용적률"],
              "추가검토": extra}
     if parcel_facts:
-        facts["필지"] = {k: parcel_facts.get(k) for k in ("주소", "pnu", "지목", "면적", "기타규제")}
+        facts["필지"] = {k: parcel_facts[k] for k in ("주소", "pnu", "법정동", "지목", "면적", "도로접면", "기타규제")
+                         if k in parcel_facts}
     others = [h for h in uses[1:] if h["score"] >= 2 or h["score"] == uses[0]["score"]]
     if others:
         facts["다른_용도_후보"] = [f"제{h['ho']}호 {h['name']}" for h in others[:3]]

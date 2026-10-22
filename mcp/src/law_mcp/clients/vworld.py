@@ -26,6 +26,8 @@ class Parcel:
     others: list[str] = field(default_factory=list)
     land_category: str | None = None
     area: str | None = None
+    road_side: str | None = None     # 토지특성 도로접면(광대로한면·세로한면(가)·맹지 등)
+    legal_dong: str | None = None    # 법정동 이름(시도 시군구 읍·면·동 리)
     notes: list[str] = field(default_factory=list)
 
 
@@ -62,7 +64,7 @@ class Client:
             except (httpx.HTTPError, ValueError) as e:
                 last = e
             if attempt + 1 < self.retries:
-                time.sleep(self.retry_wait * (attempt + 1))
+                time.sleep(min(self.retry_wait * (attempt + 1), 1.0))
         raise VworldUnavailable(f"{path}: {last}")
 
     def geocode(self, address: str) -> dict:
@@ -107,6 +109,9 @@ class Client:
             if rows:
                 latest = max(rows, key=lambda x: x.get("stdrYear", ""))
                 p.land_category, p.area = latest.get("lndcgrCodeNm"), latest.get("lndpclAr")
+                newest = sorted(rows, key=lambda x: x.get("stdrYear", ""), reverse=True)   # 해마다 빈 칸이 있다
+                p.road_side = next((x["roadSideCodeNm"] for x in newest if x.get("roadSideCodeNm")), None)
+                p.legal_dong = next((x["ldCodeNm"] for x in newest if x.get("ldCodeNm")), None)
             else:
                 p.notes.append("지목·면적을 확인하지 못했습니다(토지특성 조회 불가).")
         except VworldUnavailable:

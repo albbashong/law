@@ -14,7 +14,8 @@ def default_lookup(address: str):
     s = get_settings()
     c = _client.get(s.vworld_api_key)
     if c is None:
-        c = _client.setdefault(s.vworld_api_key, Client(s.vworld_api_key, s.vworld_timeout))
+        c = _client.setdefault(s.vworld_api_key, Client(s.vworld_api_key, s.vworld_timeout,
+                                                        retries=s.vworld_retries, retry_wait=s.vworld_retry_wait))
     return c.lookup(address)
 
 
@@ -43,6 +44,10 @@ def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
                       "브이월드 필지 조회에 실패했습니다. 시군구와 용도지역을 직접 알려 주면 법령 근거는 찾을 수 있습니다.")
     facts = {"주소": p.address, "pnu": p.pnu, "시도": p.sido, "시군구": p.sigungu, "용도지역": p.zones,
              "기타규제": p.others[:12], "지목": p.land_category, "면적": p.area}
+    if p.road_side:   # 토지특성 조사 분류 — 접한 길이·도로 지정 여부는 담지 않는다
+        facts["도로접면"] = p.road_side
+    if p.legal_dong:
+        facts["법정동"] = p.legal_dong
     if p.notes:
         facts["참고"] = p.notes
     refs = _conversion_refs(store, p.land_category)

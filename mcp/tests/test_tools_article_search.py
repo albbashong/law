@@ -264,3 +264,34 @@ def test_article_lists_the_law_abbreviations(store):
     r = run_law_article(store, "국토의 계획 및 이용에 관한 법률 시행령", "제84조제1항", chain="none")
     assert "국토계획법시행령" in r["facts"]["약칭"]
     assert nospace(r["facts"]["법령"]) not in r["facts"]["약칭"]
+
+
+def test_law_found_by_both_searches_keeps_its_place_ahead_of_ordinances():
+    """본문 검색과 제목 검색이 함께 찾은 법령 조문이 중복으로 빠져 조례 뒤로 밀리지 않는다."""
+    from law_mcp.tools.search import _merge
+    row = lambda law, art: {"law": law, "article": art}   # noqa: E731
+    text = [row("가시 건축 조례", "제30조"), row("건축법", "제44조")]
+    titled = [row("건축법", "제44조"), row("나시 건축 조례", "제31조"), row("가시 건축 조례", "제30조")]
+    out = _merge(text, titled, [], short=True)
+    assert [(r["law"], r["article"]) for r in out] == [
+        ("건축법", "제44조"), ("나시 건축 조례", "제31조"), ("가시 건축 조례", "제30조")]
+
+
+def test_three_letter_law_name_in_query_is_searched_inside(store):
+    """'건축법'처럼 세 글자 법령명도 질의에 있으면 그 법령 안에서 찾고, 제목에 낱말이 든 조문을 앞에 둔다."""
+    from law_mcp.tools.search import run_law_search
+    rows = run_law_search(store, "건축법 적용 제외")["facts"]["결과"]
+    assert (rows[0]["law"], rows[0]["article"]) == ("건축법", "제3조"), rows[:4]
+
+
+def test_opening_a_paragraph_lists_its_siblings(store):
+    """항·호 하나만 열어도 같은 조의 다른 항(위로 올라가며 각 단계의 형제)이 첫머리와 함께 보인다 — 다른 갈래를 놓치지 않게."""
+    r = run_law_article(store, "건축법 시행령", "제28조제1항", chain="none")
+    near = " ".join(r["facts"]["같은_조_다른_항목"])
+    assert "제28조제2항" in near and "연면적" in near
+    assert "제28조제1항:" not in near
+
+
+def test_whole_article_has_no_sibling_list(store):
+    r = run_law_article(store, "건축법 시행령", "제28조", chain="none")
+    assert "같은_조_다른_항목" not in r["facts"]

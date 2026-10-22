@@ -23,6 +23,20 @@ def test_match_use_finds_facility_named_inside_item(store):
     assert hit["ho"] == "4" and hit["label"].startswith("제4호")
 
 
+def test_match_use_by_ho_and_mok_number(store):
+    # 번호로 부르면 뒤에 붙은 말이 깨져도 그 호·목으로 본다 — 모델이 목록에서 고른 것을 번호로 넘기게
+    hit = match_use(store, "제3호나목 휴게음식점")[0]
+    assert hit["ho"] == "3" and hit["label"] == "제3호 나목"
+    assert match_use(store, "제4호 자목")[0]["label"] == "제4호 자목"
+    assert match_use(store, "제3호 제1부사")[0]["label"].startswith("제3호")
+
+
+def test_names_are_numbered_by_ho_and_mok(store):
+    from law_mcp.engine.uses import names
+    first = next(n for n in names(store) if n.startswith("제3호 "))
+    assert "나목 휴게음식점" in first
+
+
 def test_match_use_does_not_guess_colloquial_or_single_char(store):
     # 별표 1 원문에 없는 표현은 사전으로 추측하지 않는다 — 호출 측(LLM)이 용도명으로 바꿔 다시 부른다
     assert match_use(store, "카페") == []

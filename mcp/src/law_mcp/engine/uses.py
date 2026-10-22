@@ -9,6 +9,8 @@ from law_mcp.store.db import nospace
 
 USE_LAW = "건축법 시행령"
 USE_ANNEX = "1"
+MOK = "가나다라마바사아자차카타파하"   # 목 번호
+FACILITY_CHARS = 10      # 이보다 긴 목 머리는 시설명이 아니라 조건을 단 설명("…으로서 …아니하는 것")
 _cache: dict = {}
 
 
@@ -69,9 +71,13 @@ def match_use(store, use: str) -> list[dict]:
     """
     q = nospace(use)
     cat = catalog(store)
-    m = re.match(r"^(?:별표1)?제?(\d+(?:의\d+)?)호", q)
+    m = re.match(rf"^(?:별표1)?제?(\d+(?:의\d+)?)호(?:([{MOK}])목)?", q)
     if m:
-        return [{**c, "score": 3} for c in cat if c["ho"] == m.group(1)][:1]
+        for c in cat:
+            if c["ho"] == m.group(1):
+                it = next((it for it in c["items"] if m.group(2) and it["path"] == f"{c['ho']}/{m.group(2)}"), None)
+                return [{**c, **({"label": it["label"], "text": it["text"]} if it else {}), "score": 3}]
+        return []
     if not q:
         return []
     hits = []
@@ -97,5 +103,10 @@ def match_use(store, use: str) -> list[dict]:
 
 
 def names(store) -> list[str]:
-    """해석 실패 시 고를 수 있도록 별표 1 호 이름 목록."""
-    return [f"제{c['ho']}호 {c['name']}" for c in catalog(store)]
+    """해석 실패 시 고를 수 있도록 별표 1 호 이름과 목 번호·시설명 — 일상어를 시설명에 잇고, 번호로 다시 부르게."""
+    out = []
+    for c in catalog(store):
+        terms = [f"{it['path'].rpartition('/')[2]}목 {t}" for it in c["items"]
+                 if 2 <= len(t := facility_term(it["text"])) <= FACILITY_CHARS and t != nospace(c["name"])]
+        out.append(f"제{c['ho']}호 {c['name']}" + (f": {', '.join(terms)}" if terms else ""))
+    return out

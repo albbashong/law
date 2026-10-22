@@ -204,23 +204,38 @@ def _run_law_search(store, query: str, scope: str = "all", region: str | None = 
             break
     # 2글자 법령 용어(식비·선물·전용 등)는 trigram 으로 못 찾으므로 제목에서 찾은 것을 앞에 둔다
     short = any(len(nospace(t)) == 2 for t in query.split())
-    per_law: dict = {}
-    for row in rows:
-        per_law[row["law"]] = per_law.get(row["law"], 0) + 1
     inside, titled_all = _title_rows(store, query, doc_ids, source, limit * 2)
-    titled = []
-    for t in titled_all:                     # 한 법령이 독차지하지 않도록 PER_LAW 건까지
-        if (t["law"], t["article"]) not in seen and per_law.get(t["law"], 0) < PER_LAW:
-            per_law[t["law"]] = per_law.get(t["law"], 0) + 1
-            titled.append(t)
-    rows = (titled + rows) if short else (rows + titled)
-    # 질의에 이름이 든 법령 안에서 찾은 것은 맨 앞 — 사용자가 법령을 지목했다
-    named = {(t["law"], t["article"]) for t in inside}
-    rows = inside + [r for r in rows if (r["law"], r["article"]) not in named]
+    rows = _merge(rows, titled_all, inside, short)
     rows = rows[: limit * 2]
     if not rows:
         return result("ok", {"결과": []}, f"'{query}'에 맞는 조문이 없습니다. 다른 표현(공식 용어)으로 다시 검색하세요.")
     return result("ok", {"결과": rows}, f"{len(rows)}건. 원문과 상위·하위 근거는 호출인자로 law_article 을 부르세요.")
+
+
+def _merge(rows, titled_all, inside, short):
+    """본문 검색·제목 검색·지목 법령 안 검색 결과를 합친다.
+
+    제목 결과는 법령마다 PER_LAW 건까지 더하고, 2글자 용어가 있으면(short) 제목 순서를 앞세운다 — 본문 검색이 이미
+    찾은 조문도 제목 순서의 제자리에 둔다(중복이라 빼면 법령 조문이 조례 뒤로 밀린다). 지목 법령 안 결과는 맨 앞."""
+    key = lambda r: (r["law"], r["article"])   # noqa: E731
+    seen = {key(r) for r in rows}
+    per_law: dict = {}
+    for r in rows:
+        per_law[r["law"]] = per_law.get(r["law"], 0) + 1
+    titled = []
+    for t in titled_all:
+        if key(t) in seen:
+            titled.append(t)
+        elif per_law.get(t["law"], 0) < PER_LAW:
+            per_law[t["law"]] = per_law.get(t["law"], 0) + 1
+            titled.append(t)
+    if short:
+        first = {key(t) for t in titled}
+        rows = titled + [r for r in rows if key(r) not in first]
+    else:
+        rows = rows + [t for t in titled if key(t) not in seen]
+    named = {key(t) for t in inside}
+    return inside + [r for r in rows if key(r) not in named]
 
 
 POOL = 1000         # 다시 줄 세울 후보 수 (bm25 상위)

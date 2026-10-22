@@ -163,6 +163,9 @@ def test_unknown_use_returns_annex_1_names(store):
     r = run_building_basis(store, "카페", region="영천시", zone="자연녹지지역")
     assert r["status"] == "failed"
     assert any("제1종 근린생활시설" in n for n in r["facts"]["용도목록"])
+    # 호 이름만 주면 모델이 일상어를 호에 잇지 못한다 — 호마다 그 안의 시설명을 같이 준다
+    first = next(n for n in r["facts"]["용도목록"] if "제1종 근린생활시설" in n)
+    assert "휴게음식점" in first
 
 
 def test_missing_land_category_hint(store):
@@ -171,3 +174,35 @@ def test_missing_land_category_hint(store):
     assert "land_category" in r["message"]
     r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역", land_category="전")
     assert "land_category" not in r["message"]
+
+
+def test_address_carries_road_side_and_legal_dong(store):
+    from law_mcp.clients.vworld import Parcel
+    p = Parcel("경상북도 영천시 금호읍 신월리 1-51", "4723025028100010051", "경상북도", "영천시", ["자연녹지지역"],
+               road_side="맹지", legal_dong="경상북도 영천시 금호읍 신월리")
+    r = run_building_basis(store, "단독주택", address="영천시 신월리 1-51", parcel_lookup=lambda a: p)
+    assert r["facts"]["필지"]["도로접면"] == "맹지" and r["facts"]["필지"]["법정동"].endswith("신월리")
+
+
+def test_parcel_with_road_side_brings_road_access_articles(store):
+    """필지에 도로접면이 있으면 대지와 도로의 관계(법률·시행령)와 그 적용 제외 조문을 추가검토·refs 에 붙인다."""
+    from law_mcp.clients.vworld import Parcel
+    p = Parcel("경상북도 영천시 금호읍 신월리 1-51", "4723025028100010051", "경상북도", "영천시", ["자연녹지지역"],
+               road_side="세로한면(가)", legal_dong="경상북도 영천시 금호읍 신월리")
+    r = run_building_basis(store, "단독주택", address="영천시 신월리 1-51", parcel_lookup=lambda a: p)
+    extra = " ".join(r["facts"]["추가검토"])
+    assert "건축법 제44조" in extra and "건축법 시행령 제28조" in extra and "건축법 제3조" in extra
+    assert "세로한면(가)" in extra
+
+
+def test_no_road_side_no_road_access_articles(store):
+    r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역")
+    assert "건축법 제44조" not in " ".join(r["facts"]["추가검토"])
+
+
+def test_exemption_points_at_the_paragraph_citing_the_road_article(store):
+    """적용 제외 조문은 대지와 도로의 관계 조문 번호를 인용한 항을 가리킨다 — 발췌에 그 조건이 보이게."""
+    from law_mcp.engine.permits import road_access
+    refs = road_access(store)
+    road, exempt = refs[0], refs[-1]
+    assert exempt.article.startswith("제3조제") and road.article in exempt.excerpt.replace(" ", "")

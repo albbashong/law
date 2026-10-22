@@ -185,8 +185,8 @@ class Store:
         return [dict(zip(("kind", "ref", "doc_id", "src", "score"), r)) for r in cur]
 
     def docs_named_in(self, text):
-        """글 안에 이름(공백 무시)이 통째로 든 법령 — 긴 이름 먼저."""
-        return self._all("SELECT * FROM doc WHERE length(name_key) >= 4 AND instr(?, name_key) > 0"
+        """글 안에 이름(공백 무시)이 통째로 든 법령(세 글자 이상: 건축법·농지법) — 긴 이름 먼저."""
+        return self._all("SELECT * FROM doc WHERE length(name_key) >= 3 AND instr(?, name_key) > 0"
                          " ORDER BY source='law' DESC, length(name_key) DESC LIMIT 5", (text,))
 
     def search_text_in(self, doc_ids, words, limit=8):
@@ -195,8 +195,10 @@ class Store:
             return []
         marks = ",".join("?" * len(doc_ids))
         score = "+".join("(instr(replace(text,' ',''), ?) > 0)" for _ in words)
-        rows = self._all(f"SELECT 'u' AS kind, unit_id AS ref, doc_id, {score} AS score FROM unit"
-                         f" WHERE doc_id IN ({marks}) AND path NOT LIKE '%/%' AND score > 0", list(words) + list(doc_ids))
+        titled = "+".join("(instr(replace(COALESCE(title,''),' ',''), ?) > 0)" for _ in words)   # 제목에 든 낱말은 한 번 더
+        rows = self._all(f"SELECT 'u' AS kind, unit_id AS ref, doc_id, {score} + {titled} AS score FROM unit"
+                         f" WHERE doc_id IN ({marks}) AND path NOT LIKE '%/%' AND {score} > 0",
+                         list(words) * 2 + list(doc_ids) + list(words))
         rows += self._all(f"SELECT 'a' AS kind, annex_id AS ref, doc_id, {score} AS score FROM annex"
                           f" WHERE doc_id IN ({marks}) AND score > 0", list(words) + list(doc_ids))
         return sorted(rows, key=lambda r: -r["score"])[:limit]

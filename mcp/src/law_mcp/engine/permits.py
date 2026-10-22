@@ -11,6 +11,9 @@ from law_mcp.engine.follow import Ref, family, node
 from law_mcp.store.db import nospace
 
 PLAN_LAW = family("국토의 계획 및 이용에 관한 법률 시행령")
+BUILDING_LAW = family("건축법 시행령")
+# 대지가 도로에 접해야 하는 기준과, 그 기준을 적용하지 않는 지역을 정한 조문의 제목(법령 용어)
+ROAD_TITLE, EXEMPT_TITLE = "대지와 도로의 관계", "적용 제외"
 DEF = re.compile(r"[“\"]([^”\"]{1,30})[”\"]\s*(?:이)?(?:란|이란|라\s*함은|이라\s*함은|라고\s*함은|이라고\s*함은)")
 GRANT = re.compile(r"허가|승인")
 # 제2조 밖의 정의: "… 행위(이하 "개발행위"라 한다)"
@@ -106,3 +109,30 @@ def development_permit(store) -> Ref | None:
         if nospace(a["title"]) == "개발행위의허가":
             return node(store, d["doc_id"], a["path"])
     return None
+
+
+def titled(store, law: str, title: str) -> Ref | None:
+    """법령에서 제목이 그 법령 용어인 조문."""
+    d = store.doc_named(law)
+    if not d:
+        return None
+    for a in store._all("SELECT path, title FROM unit WHERE doc_id=? AND path NOT LIKE '%/%' ORDER BY unit_id",
+                        (d["doc_id"],)):
+        if nospace(a["title"]) == nospace(title):
+            return node(store, d["doc_id"], a["path"])
+    return None
+
+
+def road_access(store) -> list[Ref]:
+    """대지와 도로의 관계(법률·위임받은 시행령)와 그 적용 제외 조문 — 필지의 읍·면·동·용도지역으로 적용 여부를 본다."""
+    road = titled(store, BUILDING_LAW, ROAD_TITLE)
+    exempt = titled(store, BUILDING_LAW, EXEMPT_TITLE)
+    if road and exempt:   # 적용 제외 조문 중 대지와 도로 조문 번호를 인용한 항 — 그 조건이 발췌에 보이게
+        key = nospace(road.article)
+        for u in store._all("SELECT path, text FROM unit WHERE doc_id=? AND path GLOB ? ORDER BY unit_id",
+                            (exempt.doc_id, exempt.path + "/*")):
+            if re.search(re.escape(key) + r"(?!\d|의\d)", nospace(u["text"] or "")):
+                exempt = node(store, exempt.doc_id, u["path"]) or exempt
+                break
+    found = [road, titled(store, f"{BUILDING_LAW} 시행령", ROAD_TITLE), exempt]
+    return [r for r in found if r]
