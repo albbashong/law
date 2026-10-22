@@ -37,6 +37,12 @@ class Store:
         return self._all("SELECT d.* FROM alias a JOIN doc d ON d.doc_id=a.doc_id WHERE a.name_key=?"
                          " ORDER BY d.source, length(d.name)", (key,))
 
+    def aliases(self, doc_id):
+        """문서의 다른 이름(약칭) — 공백 뺀 꼴. 정식 이름은 뺀다."""
+        return [r["name_key"] for r in self._all(
+            "SELECT a.name_key FROM alias a JOIN doc d ON d.doc_id=a.doc_id WHERE a.doc_id=? AND a.name_key<>d.name_key"
+            " ORDER BY length(a.name_key)", (doc_id,))]
+
     def docs_like(self, key, limit=8):
         return self._all("SELECT * FROM doc WHERE name_key LIKE ? ORDER BY source, length(name) LIMIT ?",
                          (f"%{key}%", limit))

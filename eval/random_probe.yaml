@@ -1,0 +1,18 @@
+# 숫자가 들어가는 일반 법령 질문 — eval/audit_numbers.py 로 답의 수치를 인용 조문 원문과 자동 대조한다.
+#   python3 eval/run_eval.py --golden eval/random_probe.yaml && python3 eval/audit_numbers.py
+- {id: R01, kind: random, utterance: "제1종일반주거지역 건폐율 상한은 몇 퍼센트야?"}
+- {id: R02, kind: random, utterance: "근린생활시설 주차장은 면적당 몇 대 설치해야 해?"}
+- {id: R03, kind: random, utterance: "건축신고만으로 증축할 수 있는 면적 기준이 뭐야?"}
+- {id: R04, kind: random, utterance: "공장설립 승인을 받아야 하는 공장 면적 기준은?"}
+- {id: R05, kind: random, utterance: "주택 취득세율은 얼마야?"}
+- {id: R06, kind: random, utterance: "1년 일한 근로자의 연차휴가는 며칠이야?"}
+- {id: R07, kind: random, utterance: "퇴직금은 얼마나 일해야 받을 수 있고 얼마야?"}
+- {id: R08, kind: random, utterance: "주택 임대차 계약갱신 때 월세는 최대 몇 퍼센트까지 올릴 수 있어?"}
+- {id: R09, kind: random, utterance: "상가 임대료 증액 상한은?"}
+- {id: R10, kind: random, utterance: "공무원 출장 숙박비 서울 상한은 얼마야?"}
+- {id: R11, kind: random, utterance: "농지보전부담금은 어떻게 계산해?"}
+- {id: R12, kind: random, utterance: "자연녹지지역 개발행위허가 면적 한도는?"}
+- {id: R13, kind: random, utterance: "주택임대차 계약기간은 최소 몇 년으로 봐?"}
+- {id: R14, kind: random, utterance: "공직자에게 줄 수 있는 경조사비 한도는?"}
+- {id: R15, kind: random, utterance: "건축물 재산세 세율은 얼마야?"}
+- {id: R16, kind: random, utterance: "계획관리지역 용적률 범위는?"}

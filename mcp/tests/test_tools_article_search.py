@@ -243,3 +243,24 @@ def test_article_structure_reads_each_parents_own_lead(store):
     """호의 연결 문구("다음 각 목의 어느 하나")를 조문 전체의 관계로 잘못 읽지 않는다."""
     s = {e["조항"]: e for e in run_law_article(store, "건축법 시행령", "제15조의3", chain="none")["facts"]["구조"]}
     assert "모두" in s["제15조의3"]["연결"] and "어느 하나" in s["제15조의3제1호"]["연결"]
+
+
+# ── 조항을 열면 하위 호·목 본문까지 — 세율·기준이 목에 적힌 경우가 많다 ─────────────────────
+
+def test_opening_a_paragraph_includes_its_items(store):
+    r = run_law_article(store, "국토계획법", "제56조제1항", chain="none")
+    text = r["facts"]["원문"].replace(" ", "")
+    assert "다음각호의어느하나" in text and "1.건축물의건축" in text
+
+
+def test_images_in_law_text_are_marked_not_left_as_tags():
+    from law_mcp.engine.facts import clean_text
+    t = clean_text('세율 <img src="http://www.law.go.kr/x.gif" alt="표"> 끝')
+    assert "<img" not in t and "이미지" in t and t.startswith("세율") and t.endswith("끝")
+
+
+def test_article_lists_the_law_abbreviations(store):
+    """답에 약칭(국토계획법)을 써도 조회 결과로 확인되게 — 법령명 검증이 약칭을 지어낸 이름으로 보지 않는다."""
+    r = run_law_article(store, "국토의 계획 및 이용에 관한 법률 시행령", "제84조제1항", chain="none")
+    assert "국토계획법시행령" in r["facts"]["약칭"]
+    assert nospace(r["facts"]["법령"]) not in r["facts"]["약칭"]

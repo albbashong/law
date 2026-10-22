@@ -125,7 +125,21 @@ class Settings(BaseSettings):
         description="검증에 걸린 인용을 모델에 되돌릴 때 쓰는 문장. {cites} 자리에 인용 목록.",
     )
 
+    answer_law_pattern: str = Field(
+        default="",
+        description="답변에서 법령명을 잡는 정규식(비지 않은 그룹이 이름). 이름이 이번 대화의 도구 결과·사용자 발화에 "
+        "없으면(공백 무시) 인용처럼 되돌린다 — 지어낸 법령명을 막는다. 비우면 검증하지 않는다.",
+    )
+    answer_strip_pattern: str = Field(
+        default="", description="최종 답변에서 지울 표기의 정규식(예: 모델이 본문에 흘린 도구 호출 표기). 비우면 그대로 둔다.")
+
     # ── 도구 인자 검증. 어느 인자가 "사용자가 말한 값"이어야 하는지는 에이전트 영역이라 설정이 정한다.
+    answer_rate_check: bool = Field(
+        default=False, description="답에 쓴 비율(%, N분의 M, 1/N)이 이번 조회 원문의 비율 값과 맞는지 대조한다(값 비교).")
+    answer_rate_retry_text: str = Field(
+        default="답변의 다음 비율 수치는 조회한 원문의 어떤 값과도 맞지 않습니다: {rates}. 원문 표기(예: 1천분의 2.5)대로 "
+        "쓰거나 정확히 환산해(1천분의 2.5 = 0.25%) 다시 답하세요.",
+        description="비율 수치가 맞지 않을 때 모델에게 되돌리는 문장.")
     arg_grounded_keys: str = Field(
         default="",
         description="값이 사용자 발화·도구 결과에 나온 것이어야 하는 인자 이름(쉼표 구분, 예: address,region). "

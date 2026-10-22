@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from config import AGENT_DIR, PROMPT_PATH, settings
+import rates
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,75 @@ def mispaired(answer: str, messages: list[dict[str, Any]]) -> list[str]:
             if label not in out:
                 out.append(label)
     return out
+
+
+def _cited_scopes(answer: str, messages: list[dict[str, Any]]) -> list[str]:
+    """도구 결과 중 답이 인용한 (출처명, 인용) 짝의 부분만 — 짝을 직접 가진 dict(검색 한 줄)나, 짝을 가진 dict 를
+    바로 아래 둔 dict(조문 결과와 그 호출인자)를 통째로 꺼낸다."""
+    pattern, keys = settings.answer_pair_pattern, settings.answer_pair_key_names()
+    if not pattern or len(keys) != 2 or not answer:
+        return []
+    src, cite = keys
+    flat = re.sub(r"\s+", "", answer)
+    cited = {re.sub(r"\s+", "", m.group("cite") or "") for m in re.finditer(pattern, answer)} - {""}
+
+    def pair(v: Any) -> tuple[str, str] | None:
+        if isinstance(v, dict) and isinstance(v.get(src), str) and isinstance(v.get(cite), str):
+            return re.sub(r"\s+", "", v[src]), re.sub(r"\s+", "", v[cite])
+        return None
+
+    def hit(p: tuple[str, str] | None) -> bool:
+        return bool(p) and p[0] in flat and any(re.match(re.escape(c) + r"(?!\d|의\d)", p[1]) for c in cited)
+
+    out: list[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            if hit(pair(v)) or any(hit(pair(x)) for x in v.values()):
+                out.append(json.dumps(v, ensure_ascii=False))
+                return
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    for m in messages:
+        if m.get("role") == "tool":
+            try:
+                walk(json.loads(m.get("content") or ""))
+            except ValueError:
+                continue
+    return out
+
+
+def rate_unmatched(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
+    """답의 비율 중 원문 값과 맞지 않는 것 — 답이 인용한 조문의 결과가 있으면 그것(과 사용자 발화)하고만 대조한다.
+    다른 조문에 우연히 같은 값이 있어 통과하는 것을 막는다. 인용과 맞는 결과가 없으면 이번 조회 전체와 대조한다."""
+    scopes = _cited_scopes(answer, messages)
+    if scopes:
+        messages = [m for m in messages if m.get("role") == "user"] + [{"role": "tool", "content": t} for t in scopes]
+    return rates.unmatched(answer, messages, skip)
+
+
+def unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
+    """답에 쓴 법령명(ANSWER_LAW_PATTERN) 중 도구 결과·사용자 발화에 없는 것 (공백 무시)."""
+    pattern = settings.answer_law_pattern
+    if not pattern or not answer:
+        return []
+    corpus = "".join(re.sub(r"\s+", "", str(m.get("content") or ""))
+                     for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip)
+    out: list[str] = []
+    for hit in re.findall(pattern, answer):
+        name = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
+        if name and re.sub(r"\s+", "", name) not in corpus and name not in out:
+            out.append(name)
+    return out
+
+
+def clean_answer(answer: str) -> str:
+    """ANSWER_STRIP_PATTERN 에 맞는 표기(본문에 흘린 도구 호출 등)를 지운다."""
+    return re.sub(settings.answer_strip_pattern, "", answer) if settings.answer_strip_pattern else answer
 
 
 def _flat(messages: list[dict[str, Any]]) -> str:
@@ -587,15 +657,21 @@ async def run_query(
             if "answer" in step:
                 bad = ungrounded(step["answer"], messages, cite_notes)
                 bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
-                # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용을 ungrounded 로 남긴다
-                if bad and not cite_checked and round_idx + 1 < rounds_max:
+                bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
+                off = rate_unmatched(step["answer"], messages, cite_notes) if settings.answer_rate_check else []
+                # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
+                if bad or off:
+                    logger.info("answer check: cites=%s rates=%s retry=%s", bad, off, not cite_checked)
+                if (bad or off) and not cite_checked and round_idx + 1 < rounds_max:
                     cite_checked = True
                     messages.append({"role": "assistant", "content": step["answer"]})
-                    note = settings.answer_cite_retry_text.format(cites=", ".join(bad))
+                    note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(bad))] if bad else [])
+                                    + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else []))
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
                     continue
-                answer = step["answer"]
+                answer = clean_answer(step["answer"])
+                bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
                 elif story_wanted:

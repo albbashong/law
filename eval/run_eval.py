@@ -65,7 +65,7 @@ def memory_of(task):
 
 
 def turns_of(case):
-    return list(case.get("turns") or [case["utterance"]])
+    return list(case.get("turns") or [case.get("utterance", "")])
 
 
 def norm(s):
@@ -113,7 +113,7 @@ def evaluate(case, task, trace_rows):
     return {
         "mention": (len(phrases) - len(missing)) / len(phrases) if phrases else None, "missing": missing,
         "prefix_ok": ans.strip().startswith(prefix) if prefix else None,
-        "id": case["id"], "state": state, "state_ok": state == case.get("expect_state", "COMPLETED"),
+        "id": case["id"], "question": "\n".join(turns_of(case)), "state": state, "state_ok": state == case.get("expect_state", "COMPLETED"),
         "recall": sum(g["hit"] for g in got) / len(got) if got else None, "must": got,
         "basis": basis[-1] if basis else None,
         "basis_ok": (basis[-1] == case["expect_basis"]) if case.get("expect_basis") and basis else

@@ -5,8 +5,17 @@ import re
 EXCERPT = 400
 
 
+IMG = re.compile(r"<img\b[^>]*>", re.I)
+IMG_MARK = "[표·그림(이미지) — 내용은 원문에서 확인]"
+
+
+def clean_text(text: str) -> str:
+    """원문 속 이미지 태그(표를 그림으로 넣은 곳)를 표시로 바꾼다 — 모델이 보이지 않는 표를 지어내지 않도록."""
+    return IMG.sub(IMG_MARK, text or "")
+
+
 def excerpt(text: str, n: int = EXCERPT) -> str:
-    t = re.sub(r"\s+", " ", text or "").strip()
+    t = re.sub(r"\s+", " ", clean_text(text)).strip()
     return t if len(t) <= n else t[: n - 1] + "…"
 
 

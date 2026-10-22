@@ -60,9 +60,15 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
             hint["별표목록"] = [f"별표 {a['no']} {a['title'] or ''}"[:60] for a in store.annexes(doc["doc_id"])][:30]
         return result("failed", hint, f"{doc['name']}에 {article}이(가) 없습니다.")
     r = follow(store, doc["doc_id"], path, reg["doc_id"] if reg else None, chain, depth)
+    body = start.excerpt
+    if not path.startswith("별표") and "/" in path:   # 항·호는 자기 줄만 저장돼 있다 — 하위 호·목까지 잇는다
+        body = "\n".join(u["text"] or "" for u in store.units_with_prefix(doc["doc_id"], path)) or body
     facts = {"법령": doc["name"], "조문": start.article, "제목": start.title,
-             "원문": excerpt(start.excerpt, ORIGINAL_MAX),
+             "원문": excerpt(body, ORIGINAL_MAX),
              "호출인자": {"law": doc["name"], "article": start.article}}   # 검색 결과와 같은 모양 — 이 조문 자신
+    names = store.aliases(doc["doc_id"])
+    if names:   # 답에 약칭을 써도 조회 결과로 확인된다
+        facts["약칭"] = names
     if path.startswith("별표") and ":" not in path:
         a = store.annex(doc["doc_id"], path[2:])
         items = store.annex_items(a["annex_id"])
