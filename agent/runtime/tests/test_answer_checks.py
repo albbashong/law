@@ -59,3 +59,27 @@ def test_tool_call_notation_is_stripped(monkeypatch):
     monkeypatch.setattr(settings, "answer_strip_pattern", r"[^\S\n]*【[A-Za-z_][^】\n]*】")
     text = '5만원입니다【law_article {"law":"x","article":"별표 1"}】. 25,000원【law_article\u202ffacts:원문】. 【참고】 유지'
     assert loop.clean_answer(text) == "5만원입니다. 25,000원. 【참고】 유지"
+
+
+QUOTE = r"“([^”\n]+)”|\"([^\"\n]+)\""
+
+
+def test_quotes_must_appear_in_the_looked_up_text(monkeypatch):
+    # 따옴표 인용문은 조회 원문에 그대로 있어야 한다(공백·문장부호·줄바꿈 무시, … 로 줄인 곳은 조각마다)
+    monkeypatch.setattr(settings, "answer_quote_pattern", QUOTE)
+    monkeypatch.setattr(settings, "answer_quote_min_chars", 6)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조(?:\s*의\s*\d+)?|별표\s*\d+")
+    msgs = [article("야생생물 보호 및 관리에 관한 법률", "제23조의3",
+                    "지방자치단체의 장은 유해야생동물에게\n먹이를 주는 행위를 금지할 수 있다.")]
+    ok = "제23조의3 원문은 “유해야생동물에게 먹이를 주는 행위를 금지할 수 있다”고 정합니다."
+    cut = "| 제23조의3 | “지방자치단체의 장은 … 금지할 수 있다” |"
+    made = "제23조의3 원문은 “야생동물에게 먹이를 주는 행위는 금지한다”라고 합니다."
+    short = "“먹이”를 주는 것"
+    assert loop.misquoted(ok, msgs) == []
+    assert loop.misquoted(cut, msgs) == []
+    assert loop.misquoted(made, msgs) == ["야생동물에게 먹이를 주는 행위는 금지한다"]
+    assert loop.misquoted(short, msgs) == []
+    # 조문을 함께 적지 않은 줄의 따옴표는 원문 인용이 아니다(질문을 다시 적은 것 등)
+    assert loop.misquoted("상황 – “공원에서 빵을 먹어도 되는지”를 묻는 질문입니다.", msgs) == []
+    monkeypatch.setattr(settings, "answer_quote_pattern", "")
+    assert loop.misquoted(made, msgs) == []

@@ -141,14 +141,15 @@ def test_address_keeps_sido_for_same_name_district(store):
     assert r["status"] == "ok" and r["facts"]["시군구"].startswith("서울특별시"), r["message"]
 
 
-def test_multi_zone_aggregates_worst_status(store):
+def test_multi_zone_lists_each_zone_and_keeps_non_zones_as_regulations(store):
     from law_mcp.clients.vworld import Parcel
-    p = Parcel("영천시 어딘가", "4723000000100010000", "경상북도", "영천시", ["자연녹지지역", "없는용도지역"])
+    p = Parcel("영천시 어딘가", "4723000000100010000", "경상북도", "영천시",
+               ["자연녹지지역", "생산녹지지역", "없는용도지역"])
     r = run_building_basis(store, "공장", address="영천시 어딘가", parcel_lookup=lambda a: p)
-    assert r["status"] == "partial"
     zones = {z["용도지역"]: z for z in r["facts"]["용도지역별"]}
+    assert set(zones) == {"자연녹지지역", "생산녹지지역"}
     assert zones["자연녹지지역"]["근거상태"] == "조건부_허용"
-    assert "없는용도지역" in str(r["facts"]["용도지역별"])
+    assert "없는용도지역" in r["facts"]["필지"]["기타규제"]
 
 
 def test_related_permits_come_from_data(store):
@@ -166,6 +167,8 @@ def test_unknown_use_returns_annex_1_names(store):
     # 호 이름만 주면 모델이 일상어를 호에 잇지 못한다 — 호마다 그 안의 시설명을 같이 준다
     first = next(n for n in r["facts"]["용도목록"] if "제1종 근린생활시설" in n)
     assert "휴게음식점" in first
+    # 사용자에게 넘기지 말고 모델이 골라 다시 부르라는 표시 — 값은 고를 목록의 키
+    assert r["pick"] == "용도목록"
 
 
 def test_missing_land_category_hint(store):
@@ -206,3 +209,22 @@ def test_exemption_points_at_the_paragraph_citing_the_road_article(store):
     refs = road_access(store)
     road, exempt = refs[0], refs[-1]
     assert exempt.article.startswith("제3조제") and road.article in exempt.excerpt.replace(" ", "")
+
+
+def test_ratios_without_a_use(store):
+    # "용적률 얼마야"처럼 용도 없이 물으면 건폐율·용적률만 — 용도를 되묻게 하지 않는다
+    r = run_building_basis(store, "", region="영천시", zone="자연녹지지역")
+    f = r["facts"]
+    assert r["status"] == "ok", r["message"]
+    assert "20" in f["건폐율"] and "100" in f["용적률"]
+    assert "근거상태" not in f and f["refs"]
+    assert any(x["note"] and "건폐율" in x["note"] for x in f["refs"])
+
+
+def test_empty_use_on_building_basis_points_to_the_ratio_tool(store):
+    # 지을 것을 비워 부르면 비율만 주고 끝내지 않는다 — 지을 것을 넣거나 비율 도구를 쓰게 한다
+    from law_mcp.tools.building_basis import call_building_basis, run_zone_ratios
+    r = call_building_basis(store, "  ", region="영천시", zone="자연녹지지역")
+    assert r["status"] == "failed" and "zone_ratios" in r["message"]
+    z = run_zone_ratios(store, region="영천시", zone="자연녹지지역")
+    assert z["status"] == "ok" and "20" in z["facts"]["건폐율"]

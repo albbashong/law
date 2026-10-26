@@ -32,6 +32,38 @@ def _conversion_refs(store, land_category):
     return out
 
 
+REGULATION_EXCERPT = 160
+REGULATION_NOTE = ("규제_근거의 규제는 용도지역 기준과 별도로 그 근거 법령의 행위제한이 함께 적용될 수 있습니다."
+                   " 답변에 각 규제를 적고, 결론에 영향을 주는지 근거 조문을 law_article 로 열어 확인하세요.")
+
+
+def with_regulations(store, res: dict) -> dict:
+    """필지의 기타규제마다 근거 조문을 붙인다. 근거 법령이 있는 규제 이름은 답에서 빠지지 않게 런타임용 키로도 둔다."""
+    from law_mcp.engine.facts import excerpt
+    from law_mcp.engine.regulations import base_name, regulation_basis
+    facts = res.get("facts") or {}
+    p = facts["필지"] if isinstance(facts.get("필지"), dict) else facts
+    names = p.get("기타규제") or []
+    if not store or not names:
+        return res
+    rows, named = [], []
+    for n in names:
+        b = regulation_basis(store, n)
+        row = {"규제": n}
+        if b:   # 첫 근거는 원문 첫머리도 — 모델이 규제의 내용을 지어내지 않고 원문으로 판단하게
+            row["근거"] = [f"{x['law']} {x['article']}({x['title']})" for x in b]
+            text = b[0]["text"]
+            at = text.find(base_name(n))
+            row["원문"] = excerpt(text if at < 0 else "…" + text[max(0, at - 20):], REGULATION_EXCERPT)
+        rows.append(row)
+        if b:
+            named.append(base_name(n))
+    if not named:
+        return res
+    p["규제_근거"], p["규제_안내"] = rows, REGULATION_NOTE
+    return {get_settings().mention_key: named, **res}
+
+
 def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
     lookup = lookup or default_lookup
     try:
@@ -56,7 +88,7 @@ def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
         facts["필요_인허가"] = [f"{x['note'].split(' — ')[1]}({x['law']} {x['article']})" for x in refs]
     if not p.zones:
         return result("partial", facts, "필지는 찾았지만 용도지역을 확인하지 못했습니다.")
-    return result("ok", facts, "용도지역은 토지이용계획 기준입니다. 건축 근거는 building_basis 로 이어서 찾으세요.")
+    return with_regulations(store, result("ok", facts, "용도지역은 토지이용계획 기준입니다. 건축 근거는 building_basis 로 이어서 찾으세요."))
 
 
 def register(mcp, get_store):

@@ -12,6 +12,7 @@ from law_mcp.engine.rules import find_items, header_of, is_partial_item, normali
 from law_mcp.engine.uses import facility_term, match_use, names as use_names
 from law_mcp.tools.article import resolve_region
 from law_mcp.tools.common import READ_ONLY, result, trace
+from law_mcp.tools.parcel import with_regulations
 
 ENF = "국토의 계획 및 이용에 관한 법률 시행령"
 EXPLAIN = {
@@ -36,6 +37,22 @@ def _ratio(store, doc_id, title_kw: str, zone: str) -> tuple[str | None, Ref | N
                 val = re.split(r"[:：]", u["text"], maxsplit=1)[1].strip()
                 return excerpt(val, 160), node(store, doc_id, u["path"])
     return None, None
+
+
+def _ratios(store, plan_id, enf_id, zkey) -> tuple[dict, list[Ref]]:
+    """조례의 건폐율·용적률 값과 근거 — 조례에 없으면 시행령 범위로."""
+    ratios, refs = {}, []
+    for label in ("건폐율", "용적률"):
+        val, ref = _ratio(store, plan_id, label, zkey)
+        if ref:
+            ref.note = f"조례 {label}"
+            refs.append(ref)
+        evals, eref = _ratio(store, enf_id, label, zkey)
+        if eref:
+            eref.note = f"시행령 {label} 범위"
+            refs.append(eref)
+        ratios[label] = val or (f"{evals} (시행령 범위, 조례 값 미확인)" if evals else "미확인")
+    return ratios, refs
 
 
 def _ordinance_source(store, plan_doc_id, zone: str):
@@ -65,6 +82,37 @@ def _item_ref(store, doc_id, no, item, note) -> Ref:  # 시행령 별표 항목
     return r
 
 
+def _unknown_use(store, use) -> dict:
+    # pick: 사용자가 아니라 모델이 이 목록에서 골라 다시 부를 것 — 런타임이 되묻기를 한 번 돌려보낸다
+    return {"pick": "용도목록", **result("failed", {"용도목록": use_names(store)},
+                  f"'{use}'는 건축법 시행령 별표 1 원문에 나오는 용도명·시설명이 아닙니다."
+                  " 사용자에게 묻기 전에, 표현의 일반적인 뜻에 가장 가까운 것을 용도목록(호 이름: 목 번호 시설명)에서"
+                  " 하나 골라, 그 번호를 '제3호나목'처럼 호·목 번호로(목이 없으면 호 번호만) use 에 넣어 바로 다시"
+                  " 호출하세요. 용도목록은 고르기 위한 것일 뿐 지을 수 있는지의 근거가 아니므로, 다시 호출한 결과로 답하세요."
+                  " 답변에는 어느 용도로 해석했는지 밝히세요.")}
+
+
+def _ratios_only(store, region, zone, parcel_facts) -> dict:
+    """용도 없이 건폐율·용적률만 물었을 때."""
+    if not region or not zone:
+        return result("failed", {}, "시군구(region)와 용도지역(zone), 또는 주소(address)가 필요합니다.")
+    zkey = normalize_zone(zone)
+    if not store.zone(zkey):
+        valid = [r["zone"] for r in store._all("SELECT zone FROM zone_map")]
+        return result("failed", {"용도지역목록": valid}, f"'{zone}'을 용도지역으로 해석하지 못했습니다.")
+    reg, err = resolve_region(store, region)
+    if err:
+        return err
+    ratios, refs = _ratios(store, reg["doc_id"], store.doc_named(ENF)["doc_id"], zkey)
+    facts = {"시군구": reg["org"], "용도지역": zkey, **ratios}
+    if parcel_facts:
+        facts["필지"] = {k: parcel_facts[k] for k in ("주소", "pnu", "법정동", "지목", "면적", "기타규제") if k in parcel_facts}
+    packed, over = pack(refs, get_settings().facts_max_chars - size(facts) - 300, 300)
+    facts["refs"], facts["더_볼_연결"] = packed, over[:6]
+    return result("ok", facts, "용도지역의 건폐율·용적률입니다. 무엇을 지을 수 있는지는 이 결과로 답할 수 없습니다"
+                  " — 지으려는 것이 있으면 building_basis 로 찾으세요.")
+
+
 def run_building_basis(store, use: str, region: str | None = None, zone: str | None = None,
                        land_category: str | None = None, address: str | None = None,
                        parcel_lookup=None) -> dict:
@@ -79,7 +127,13 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         # 시도를 함께 넘긴다 — "중구"·"북구" 같은 동명 자치구, 세종(시군구 없음) 대비
         region = region or f"{parcel_facts.get('시도') or ''} {parcel_facts['시군구'] or ''}".strip()
         land_category = land_category or parcel_facts["지목"]
-        zones = parcel_facts["용도지역"]
+        # 브이월드 '…지역'에는 도시지역(대분류)·규제지역도 섞여 온다 — 용도지역으로 해석되는 것만
+        zones = [z for z in parcel_facts["용도지역"] if store.zone(normalize_zone(z))] or parcel_facts["용도지역"]
+        if zones != parcel_facts["용도지역"]:
+            parcel_facts = {**parcel_facts, "용도지역": zones,
+                            "기타규제": [z for z in parcel_facts["용도지역"] if z not in zones] + parcel_facts.get("기타규제", [])}
+        if (use or "").strip() and not match_use(store, use):
+            return _unknown_use(store, use)     # 용도지역마다 나누기 전에 — 나누면 용도목록이 묻힌다
         if not zone and len(zones) > 1:
             each = [run_building_basis(store, use, region, z, land_category) for z in zones]
             per_zone = []
@@ -100,18 +154,15 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         if not zone:
             return result("failed", {"필지": parcel_facts}, "이 필지의 용도지역을 확인하지 못했습니다. 용도지역을 직접 알려 주세요.")
 
+    if not (use or "").strip():
+        return _ratios_only(store, region, zone, parcel_facts)
     uses = match_use(store, use)
     if not uses:
-        return result("failed", {"용도목록": use_names(store)},
-                      f"'{use}'는 건축법 시행령 별표 1 원문에 나오는 용도명·시설명이 아닙니다."
-                      " 사용자에게 묻기 전에, 표현의 일반적인 뜻에 가장 가까운 것을 용도목록(호 이름: 목 번호 시설명)에서"
-                      " 하나 골라, 그 번호를 '제3호나목'처럼 호·목 번호로(목이 없으면 호 번호만) use 에 넣어 바로 다시"
-                      " 호출하세요. 용도목록은 고르기 위한 것일 뿐 지을 수 있는지의 근거가 아니므로, 다시 호출한 결과로 답하세요."
-                      " 답변에는 어느 용도로 해석했는지 밝히세요.")
+        return _unknown_use(store, use)
     ho, uname = uses[0]["ho"], uses[0]["name"]
     mm = re.search(r"([가-하])목$", uses[0]["label"])
     mok = mm.group(1) if mm else None              # 목 단위로 물었으면(일반음식점 = 제4호 자목) 목 단위로 본다
-    term = facility_term(uses[0]["text"]) if mok else None
+    term = (uses[0].get("term") or facility_term(uses[0]["text"]) or None) if mok else None
     if not region or not zone:
         return result("failed", {}, "시군구(region)와 용도지역(zone), 또는 주소(address)가 필요합니다.")
     zkey = normalize_zone(zone)
@@ -211,17 +262,8 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         chain += follow(store, enf["doc_id"], f"별표{zm['annex_no']}", plan_id, "up", 2).refs[1:]
 
     # 4) 건폐율·용적률
-    ratios = {}
-    for label, kw, enf_jo in (("건폐율", "건폐율", "제84조"), ("용적률", "용적률", "제85조")):
-        val, ref = _ratio(store, plan_id, kw, zkey)
-        if ref:
-            ref.note = f"조례 {label}"
-            chain.append(ref)
-        evals, eref = _ratio(store, enf["doc_id"], kw, zkey)
-        if eref:
-            eref.note = f"시행령 {label} 범위"
-            chain.append(eref)
-        ratios[label] = val or (f"{evals} (시행령 범위, 조례 값 미확인)" if evals else "미확인")
+    ratios, rrefs = _ratios(store, plan_id, enf["doc_id"], zkey)
+    chain += rrefs
 
     # 5) 관련 인허가 — 지목·용도를 정의하는 법률에서 제목으로 찾는다 (표를 두지 않는다)
     extra = []
@@ -276,6 +318,19 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     return result(status, facts, msg)
 
 
+def run_zone_ratios(store, region: str | None = None, zone: str | None = None, address: str | None = None,
+                    parcel_lookup=None) -> dict:
+    """지을 것 없이 용도지역의 건폐율·용적률만."""
+    return with_regulations(store, run_building_basis(store, "", region, zone, None, address, parcel_lookup))
+
+
+def call_building_basis(store, use: str, region=None, zone=None, land_category=None, address=None) -> dict:
+    if not (use or "").strip():
+        return result("failed", {}, "use(지으려는 것)가 비었습니다. 질문에 나온 지으려는 것을 use 에 넣어 다시 부르세요."
+                      " 지을 것 없이 건폐율·용적률만 물었다면 zone_ratios 를 부르세요.")
+    return with_regulations(store, run_building_basis(store, use, region, zone, land_category, address))
+
+
 def register(mcp, get_store):
     @mcp.tool(title="건축 가능 근거 조회 — 용도지역별로 지을 수 있는 건축물·건폐율·용적률", annotations=READ_ONLY)
     def building_basis(
@@ -291,4 +346,17 @@ def register(mcp, get_store):
         건폐율·용적률 조문, 상위법, 지목·용도를 정의하는 법률의 허가·승인 조문까지 refs 로 준다.
         주소만 있으면 address 로 넘긴다. 근거상태는 열거 여부이며 허가 판정이 아니다.
         """
-        return trace("building_basis", dict(use=use, region=region, zone=zone, land_category=land_category, address=address), run_building_basis(get_store(), use, region, zone, land_category, address))
+        return trace("building_basis", dict(use=use, region=region, zone=zone, land_category=land_category, address=address), call_building_basis(get_store(), use, region, zone, land_category, address))
+
+    @mcp.tool(title="용도지역 건폐율·용적률 — 지을 것 없이 비율만", annotations=READ_ONLY)
+    def zone_ratios(
+        address: Annotated[str | None, Field(description="주소·지번 (주면 용도지역을 직접 확인)")] = None,
+        region: Annotated[str | None, Field(description="시군구 (예: 영천시) — address 가 없을 때")] = None,
+        zone: Annotated[str | None, Field(description="용도지역 (예: 자연녹지지역) — address 가 없을 때")] = None,
+    ) -> dict:
+        """여기 건폐율·용적률 얼마야? — 지으려는 것 없이 용도지역의 건폐율·용적률과 근거 조례·시행령 조문을 찾는다.
+
+        지으려는 것(공장·주택·카페 등)이 질문에 있으면 이 도구가 아니라 building_basis 를 쓴다.
+        """
+        return trace("zone_ratios", dict(region=region, zone=zone, address=address),
+                     run_zone_ratios(get_store(), region, zone, address))

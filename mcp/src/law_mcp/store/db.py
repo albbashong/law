@@ -20,7 +20,7 @@ class Store:
             raise StoreUnavailable(f"법령 DB 파일이 없습니다: {path}")
         self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
-        self._tix, self._tix_lock, self._df = None, threading.Lock(), {}
+        self._tix, self._tix_lock, self._df, self._vocab = None, threading.Lock(), {}, False
 
     def _all(self, sql, args=()):
         return [dict(r) for r in self.db.execute(sql, args)]
@@ -107,6 +107,9 @@ class Store:
         return self._all("SELECT r.region, r.sido, d.doc_id, d.name, d.org FROM region_plan r"
                          " JOIN doc d ON d.doc_id=r.doc_id WHERE r.region=?", (region,))
 
+    def sido_known(self, sido) -> bool:
+        return self._one("SELECT 1 FROM region_plan WHERE sido=? LIMIT 1", (sido,)) is not None
+
     def zone(self, zone):
         return self._one("SELECT * FROM zone_map WHERE zone=?", (nospace(zone),))
 
@@ -163,6 +166,34 @@ class Store:
         if word not in self._df:
             self._df[word] = self._titles().execute("SELECT count(*) FROM t WHERE instr(s, ?) > 0", (word,)).fetchone()[0]
         return self._df[word]
+
+    # 2글자 낱말 — trigram 은 3글자 조각만 색인하므로, 색인 낱말 목록에서 그 낱말로 시작하는 조각을 모아 대신 찾는다.
+    def index_grams(self, word, limit=40):
+        """2글자면 색인에 실제로 있는 '그 낱말+한 글자' 조각들(많이 나오는 순), 아니면 [word]."""
+        if len(word) != 2:
+            return [word]
+        with self._tix_lock:
+            if not self._vocab:
+                for t in ("fts_unit", "fts_annex"):
+                    self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS temp.{t}_vocab USING fts5vocab(main, {t}, row)")
+                self._vocab = True
+        end = word[:-1] + chr(ord(word[-1]) + 1)
+        rows = self.db.execute("SELECT term, sum(doc) n FROM (SELECT term, doc FROM temp.fts_unit_vocab WHERE term>=? AND term<?"
+                               " UNION ALL SELECT term, doc FROM temp.fts_annex_vocab WHERE term>=? AND term<?)"
+                               " GROUP BY term ORDER BY n DESC LIMIT ?", (word, end, word, end, limit)).fetchall()
+        return [r[0] for r in rows if '"' not in r[0]]
+
+    def unit_count(self):
+        if "units" not in self._df:
+            self._df["units"] = self.db.execute("SELECT count(*) FROM unit").fetchone()[0]
+        return self._df["units"]
+
+    def body_df(self, expr):
+        """그 검색식에 맞는 조문 수 — 흔한 낱말부터 빼고 다시 찾을 때 쓴다."""
+        key = ("body", expr)
+        if key not in self._df:
+            self._df[key] = self.db.execute("SELECT count(*) FROM fts_unit WHERE fts_unit MATCH ?", (expr,)).fetchone()[0]
+        return self._df[key]
 
     def search_titles(self, words, doc_ids=None, source=None, limit=40):
         """제목에 든 검색어의 드묾(log N/df) 합 순, 같으면 법령 먼저 — [{kind, ref, doc_id, src, score}]."""

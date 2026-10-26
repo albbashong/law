@@ -172,15 +172,23 @@ def _up(store, ref: Ref) -> list[tuple[int, str, str]]:
         segs = ref.path.split("/")
         for i in range(1, len(segs)):   # 조·항 머리 문장의 인용("영 제84조제1항의 규정에 의하여")
             links += store.links_from(ref.doc_id, "/".join(segs[:i]))
-    # lnkLsOrdJo(조례연계)는 잡음이 있다 — 이 조문(과 머리 문장)이 실제로 인용한 법령으로만 올라간다
-    cited = {l["to_doc"] for l in links if l["kind"] == "인용"}
+    # lnkLsOrdJo(조례연계)는 잡음이 있다 — 이 조문(과 머리 문장)이 실제로 인용한 법령으로만 올라간다.
+    # 다만 법령을 하나도 인용하지 않는 조문(위원회 구성 등)은 법제처 연계가 유일한 상위 단서라 그대로 둔다
+    cited = {l["to_doc"] for l in links if l["kind"] == "인용" and store.doc(l["to_doc"])["source"] == "law"}
     for l in links:
         if not l["to_path"] or (l["to_doc"] == ref.doc_id and _related(l["to_path"], ref.path)):
             continue
-        if l["kind"] == "조례연계" and l["to_doc"] not in cited:
+        if l["kind"] == "조례연계" and cited and l["to_doc"] not in cited:
             continue
         target = store.doc(l["to_doc"])
-        rel = "상위" if rank(target["kind"]) < rank(me["kind"]) else "인용"
+        # 상위 = 위임한 쪽 — 같은 법령 계열(법률→시행령→시행규칙)이거나, 자치법규가 인용한 법령.
+        # 다른 계열 법령을 정의 등으로 인용한 것은 순위가 높아도 위임 근거가 아니다
+        upper = rank(target["kind"]) < rank(me["kind"]) and (
+            me["source"] == "ordin" or family(target["name"]) == family(me["name"]))
+        rel = "상위" if upper else "인용"
+        if l["kind"] == "조례연계" and not cited:
+            out.append((l["to_doc"], l["to_path"], rel, "법제처 연계 — 조문에 직접 인용은 없음. 위임 근거인지 원문 확인"))
+            continue
         if l["to_doc"] == ref.doc_id and l["to_path"].startswith("제") and ref.path.startswith("별표"):
             rel = "근거조문"
         if l["kind"] == "인용" and l["to_doc"] != ref.doc_id and l["from_path"] and deems(store, ref.doc_id, l["from_path"]):

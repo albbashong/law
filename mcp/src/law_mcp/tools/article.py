@@ -7,7 +7,7 @@ from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.structure import structure
 from law_mcp.engine.follow import deemed_items, follow, node
-from law_mcp.engine.resolve import find_doc, find_region, name_key, parse_article, suggest
+from law_mcp.engine.resolve import close_name, find_doc, find_region, name_key, parse_article, suggest
 from law_mcp.tools.common import READ_ONLY, candidates_result, result, trace
 
 ORIGINAL_MAX = 2500
@@ -17,6 +17,11 @@ def resolve_doc(store, law: str):
     """(doc 또는 None, 실패/되묻기 결과 또는 None)"""
     docs = find_doc(store, law)
     if not docs:
+        s = get_settings()
+        fixed = close_name(store, law, s.law_name_fix_ratio, s.law_name_fix_margin)
+        if fixed:     # 한두 글자 틀린 이름 — 모델이 제안을 두고 같은 이름을 되풀이하지 않게 여기서 고쳐 조회한다
+            doc, err = resolve_doc(store, fixed)
+            return ({**doc, "보정전": law} if doc else None), err
         return None, result("failed", {"제안": suggest(store, law)},
                             f"'{law}' 법령·조례를 찾지 못했습니다. 정식 명칭이나 제안 목록의 이름으로 다시 호출하세요.")
     exact = [d for d in docs if d["name_key"] == name_key(law) or len(docs) == 1]
@@ -70,6 +75,8 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     facts = {"법령": doc["name"], "조문": start.article, "제목": start.title,
              "원문": excerpt(body, ORIGINAL_MAX),
              "호출인자": {"law": doc["name"], "article": start.article}}   # 검색 결과와 같은 모양 — 이 조문 자신
+    if doc.get("보정전"):
+        facts["법령명_보정"] = f"'{doc['보정전']}'이라는 법령은 없어, 이름이 가장 가까운 '{doc['name']}'으로 조회했습니다."
     if not path.startswith("별표") and "/" in path:   # 항·호 하나만 열었을 때 — 위로 올라가며 각 단계의 다른 항목 첫머리
         near, cur = [], path
         while "/" in cur:

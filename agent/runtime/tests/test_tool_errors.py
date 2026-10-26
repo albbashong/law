@@ -97,7 +97,7 @@ async def test_repeated_identical_call_is_blocked(monkeypatch):
                        {"answer": "포기"}])
     raw = await loop.run_query("q", mcp=mcp, model=model)
     assert len(mcp.calls) == 2                                   # 세 번째는 부르지 않았다
-    blocked = model.seen[3][-1]["content"]
+    blocked = model.seen[3][-2]["content"]                       # 그 뒤에 도구 없이 답하라는 지시가 붙는다
     assert "같은 호출을 반복" in blocked and "survey" in blocked and "3회" in blocked
     assert raw["errors"][0]["attempts"] == 2
 
@@ -271,3 +271,110 @@ async def test_all_servers_dead_is_unavailable(monkeypatch):
     raw = await loop.run_query("q", mcp=adapter, model=FakeModel([]))
     assert raw["stopped"] == "unavailable"
     assert raw["errors"][0]["tool"] == "parcel" and raw["errors"][0]["kind"] == "unavailable"
+
+
+class ToolsSeenModel(FakeModel):
+    def __init__(self, script):
+        super().__init__(script)
+        self.tools_seen = []
+
+    async def next_step(self, messages, tools):
+        self.tools_seen.append(list(tools))
+        return await super().next_step(messages, tools)
+
+
+async def test_round_of_only_blocked_repeats_is_followed_by_an_answer_round(monkeypatch):
+    # 막힌 호출만 되풀이하면 라운드 상한까지 헛돌다 실패한다 — 다음 라운드는 도구 없이 지금까지로 답하게 한다
+    monkeypatch.setattr(settings, "tool_retry_max", 2)
+    mcp = FakeMcp({"survey": ToolError("못 찾았습니다. 제안: 정식 이름")})
+    model = ToolsSeenModel([{"tool": "survey", "args": {"query": "a"}},
+                            {"tool": "survey", "args": {"query": "a"}},
+                            {"tool": "survey", "args": {"query": "a"}},
+                            {"answer": "찾은 범위로 답합니다."}])
+    raw = await loop.run_query("q", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer" and raw["answer"] == "찾은 범위로 답합니다."
+    assert model.tools_seen[2] and model.tools_seen[3] == []
+    assert settings.repeat_answer_text in model.seen[3][-1]["content"]
+
+
+async def test_same_result_under_reworded_args_counts_as_a_repeat(monkeypatch):
+    # 검색어만 조금씩 바꿔 같은 결과를 되풀이 받으면 라운드 상한까지 헛돈다 — 같은 결과도 반복으로 센다
+    monkeypatch.setattr(settings, "tool_retry_max", 2)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    mcp = FakeMcp({"search": lambda a: {"status": "ok", "facts": {"refs": [["도로교통법", "제50조"]]},
+                                        "message": f"'{a['query']}' 1건"}})
+    model = ToolsSeenModel([{"tool": "search", "args": {"query": "헬멧 범칙금"}},
+                            {"tool": "search", "args": {"query": "헬멧 미착용 범칙금"}},
+                            {"tool": "search", "args": {"query": "헬멧 착용 의무"}},
+                            {"answer": "찾은 범위로 답합니다."}])
+    raw = await loop.run_query("q", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer"
+    assert "새로 나온 근거가 없습니다" in model.seen[3][-2]["content"]
+    assert model.tools_seen[3] == [] and settings.repeat_answer_text in model.seen[3][-1]["content"]
+
+
+async def test_last_round_answers_from_what_was_found(monkeypatch):
+    # 라운드 상한에 닿으면 실패 대신, 마지막 라운드는 도구 없이 조회한 것으로 답하게 한다
+    monkeypatch.setattr(settings, "rounds_max", 3)
+    n = {"i": 0}
+
+    def search(a):
+        n["i"] += 1
+        return {"status": "ok", "facts": {"refs": [["법", f"제{n['i']}조"]]}}
+    mcp = FakeMcp({"search": search})
+    model = ToolsSeenModel([{"tool": "search", "args": {"query": "a"}},
+                            {"tool": "search", "args": {"query": "b"}},
+                            {"answer": "여기까지 찾은 것으로 답합니다."}])
+    raw = await loop.run_query("q", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer" and model.tools_seen[2] == []
+    assert settings.last_round_text in model.seen[2][-1]["content"]
+
+
+async def test_ask_after_pick_list_is_sent_back_once():
+    # 도구가 "목록에서 골라 다시 부르라"(pick)고 했는데 모델이 사용자에게 고르라 하면 한 번 돌려보낸다
+    def build(a):
+        if a["use"] == "카페":
+            return {"status": "failed", "facts": {"용도목록": ["제3호 가목 휴게음식점"]},
+                    "message": "골라 다시 부르세요.", "pick": "용도목록"}
+        return {"status": "ok", "facts": {"근거상태": "조례_허용"}, "message": "ok"}
+    mcp = FakeMcp({"building_basis": build})
+    model = FakeModel([{"tool": "building_basis", "args": {"use": "카페"}},
+                       {"tool": "ask_user", "args": {"question": "어느 용도로 볼까요?"}},
+                       {"tool": "building_basis", "args": {"use": "제3호가목"}},
+                       {"answer": "휴게음식점으로 보고 답합니다."}])
+    raw = await loop.run_query("카페 되나요", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer"
+    assert "용도목록" in model.seen[2][-1]["content"] and model.seen[2][-1]["role"] == "tool"
+
+
+async def test_second_ask_after_pick_list_reaches_the_user():
+    # 돌려보낸 뒤에도 또 물으면 정말 애매한 것 — 사용자에게 묻는다
+    mcp = FakeMcp({"building_basis": lambda a: {"status": "failed", "facts": {"용도목록": ["x"]},
+                                                "message": "m", "pick": "용도목록"}})
+    model = FakeModel([{"tool": "building_basis", "args": {"use": "카페"}},
+                       {"tool": "ask_user", "args": {"question": "q1"}},
+                       {"tool": "ask_user", "args": {"question": "q2"}}])
+    raw = await loop.run_query("카페", mcp=mcp, model=model)
+    assert raw["stopped"] == "ask" and raw["ask"]["question"] == "q2"
+
+
+async def test_answer_missing_a_parcel_regulation_is_sent_back_once():
+    # 도구가 답에 꼭 나와야 할 규제 이름(mention)을 주었는데 답에 없으면 한 번 되돌린다
+    mcp = FakeMcp({"building_basis": lambda a: {"status": "ok", "facts": {"근거상태": "조례_허용"},
+                                                "message": "ok", "mention": ["개발제한구역"]}})
+    model = FakeModel([{"tool": "building_basis", "args": {"use": "공장"}},
+                       {"answer": "공장은 지을 수 있습니다."},
+                       {"answer": "다만 개발제한구역이라 원칙적으로 건축이 제한됩니다."}])
+    raw = await loop.run_query("공장 되나요", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer" and "개발제한구역" in raw["answer"]
+    assert "개발제한구역" in model.seen[2][-1]["content"] and model.seen[2][-1]["role"] == "user"
+
+
+async def test_answer_still_missing_a_regulation_after_one_return_is_given():
+    mcp = FakeMcp({"building_basis": lambda a: {"status": "ok", "facts": {"근거상태": "조례_허용"},
+                                                "message": "ok", "mention": ["개발 제한 구역"]}})
+    model = FakeModel([{"tool": "building_basis", "args": {"use": "공장"}},
+                       {"answer": "공장은 지을 수 있습니다."},
+                       {"answer": "공장은 지을 수 있습니다!"}])
+    raw = await loop.run_query("공장 되나요", mcp=mcp, model=model)
+    assert raw["stopped"] == "answer" and raw["answer"].startswith("공장은 지을 수 있습니다!")

@@ -9,7 +9,6 @@ from law_mcp.store.db import nospace
 
 USE_LAW = "건축법 시행령"
 USE_ANNEX = "1"
-MOK = "가나다라마바사아자차카타파하"   # 목 번호
 FACILITY_CHARS = 10      # 이보다 긴 목 머리는 시설명이 아니라 조건을 단 설명("…으로서 …아니하는 것")
 _cache: dict = {}
 
@@ -36,10 +35,30 @@ def _name(first_line: str, law_names: list[str]) -> str:
     return re.split(r"[\[\(「/]", s, maxsplit=1)[0].strip()
 
 
+def facility_terms(text: str) -> list[str]:
+    """목 머리에 열거된 시설명들: '러. 안마시술소, 노래연습장' → [안마시술소, 노래연습장].
+
+    "…등 일용품을 판매하는 소매점으로서"처럼 물품을 늘어놓고 설명으로 시설을 부르면 설명 끝의 시설명(소매점).
+    "…으로서/로서" 뒤는 조건, "「법」 …에 따른" 은 근거 표기라 뗀다.
+    """
+    s = re.sub(r"^\s*[가-힣]\.\s*", "", text.split("\n", 1)[0])
+    s = re.sub(r"「[^」]*」", "", s)                    # 근거 법령명 — 안의 '및'·쉼표로 나누지 않게
+    s = re.split(r"[:：\(\[]|(?<=[가-힣])으?로서\s", s + " ", maxsplit=1)[0]
+    enum, _, desc = s.partition(" 등 ")
+    out = []
+    for x in re.split(r",|\s및\s", enum):
+        x = re.sub(r"^.*에\s*따른\s*", "", x).strip()
+        if x and "·" not in x and "ㆍ" not in x and not nospace(x).startswith("그밖에"):   # 물품 목록·"그 밖에 이와 유사한 것"은 빼고
+            out.append(nospace(x))
+    if not out and desc.strip() and len(w := nospace(desc.split()[-1])) >= 3 and "·" not in w:
+        out.append(w)       # 열거가 물품뿐이면 설명이 부르는 시설명
+    return [t for t in dict.fromkeys(out) if 2 <= len(t) <= FACILITY_CHARS]
+
+
 def facility_term(text: str) -> str:
-    """목의 첫 시설명: '자. 일반음식점' → '일반음식점', '나. 다중주택: 다음의 …' → '다중주택'"""
-    s = re.sub(r"^\s*[가-하]\.\s*", "", text.split("\n", 1)[0])
-    return nospace(re.split(r"[:：\(\[,ㆍ·]|\s등\s", s, maxsplit=1)[0])
+    """목의 첫 시설명 (없으면 빈 문자열)."""
+    terms = facility_terms(text)
+    return terms[0] if terms else ""
 
 
 def catalog(store) -> list[dict]:
@@ -71,7 +90,7 @@ def match_use(store, use: str) -> list[dict]:
     """
     q = nospace(use)
     cat = catalog(store)
-    m = re.match(rf"^(?:별표1)?제?(\d+(?:의\d+)?)호(?:([{MOK}])목)?", q)
+    m = re.match(r"^(?:별표1)?제?(\d+(?:의\d+)?)호(?:([가-힣])목)?", q)   # 목은 가…하 다음 거·너·더… 로 이어진다
     if m:
         for c in cat:
             if c["ho"] == m.group(1):
@@ -84,9 +103,10 @@ def match_use(store, use: str) -> list[dict]:
     for c in cat:
         name = nospace(c["name"])
         best = (3, c) if q == name else (0, None)
+        term = None
         for it in c["items"]:
-            if best[0] < 3 and q == facility_term(it["text"]):
-                best = (3, it)
+            if best[0] < 3 and q in facility_terms(it["text"]):
+                best, term = (3, it), q
         if best[0] < 2 and len(q) >= 2 and (q in name or name in q):
             best = (2, c)
         if best[0] < 1 and len(q) >= 2:
@@ -97,7 +117,7 @@ def match_use(store, use: str) -> list[dict]:
         if best[0]:
             src = best[1]
             hits.append({"ho": c["ho"], "name": c["name"], "label": src["label"], "text": src["text"],
-                         "score": best[0]})
+                         "score": best[0], "term": term})
     hits.sort(key=lambda h: -h["score"])
     return hits
 
@@ -106,7 +126,7 @@ def names(store) -> list[str]:
     """해석 실패 시 고를 수 있도록 별표 1 호 이름과 목 번호·시설명 — 일상어를 시설명에 잇고, 번호로 다시 부르게."""
     out = []
     for c in catalog(store):
-        terms = [f"{it['path'].rpartition('/')[2]}목 {t}" for it in c["items"]
-                 if 2 <= len(t := facility_term(it["text"])) <= FACILITY_CHARS and t != nospace(c["name"])]
+        terms = [f"{it['path'].rpartition('/')[2]}목 {'·'.join(ts)}" for it in c["items"]
+                 if (ts := [t for t in facility_terms(it["text"]) if t != nospace(c["name"])])]
         out.append(f"제{c['ho']}호 {c['name']}" + (f": {', '.join(terms)}" if terms else ""))
     return out

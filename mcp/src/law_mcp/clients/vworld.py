@@ -6,6 +6,7 @@ import time
 import httpx
 
 BASE = "https://api.vworld.kr"
+SIDO_SUFFIX = ("도", "특별시", "광역시", "특별자치시")   # 첫 토큰이 이렇게 끝나면 시도 (시군구는 시·군·구로 끝난다)
 
 
 class AddressNotFound(Exception):
@@ -86,13 +87,42 @@ class Client:
         pid = items[0].get("id") if items else None
         return pid if pid and len(pid) == 19 else None
 
+    @staticmethod
+    def _fallbacks(address: str) -> list[str]:
+        """찾지 못한 주소에서 틀렸을 수 있는 상위 표기만 뺀다 — 앞의 시도, 리 앞의 읍·면. 시군구는 빼지 않는다."""
+        toks = address.split()
+        no_sido = toks[1:] if len(toks) > 2 and toks[0].endswith(SIDO_SUFFIX) else toks
+        out = []
+        for t in (no_sido, [x for x in toks if not x.endswith(("읍", "면"))],
+                  [x for x in no_sido if not x.endswith(("읍", "면"))]):
+            if t != toks and len(t) >= 3 and " ".join(t) not in out:
+                out.append(" ".join(t))
+        return out
+
+    def _geocode_loose(self, address: str) -> tuple[dict, str | None]:
+        try:
+            return self.geocode(address), None
+        except AddressNotFound:
+            pass
+        for alt in self._fallbacks(address):
+            try:
+                g = self.geocode(alt)
+            except AddressNotFound:
+                continue
+            refined = (g["refined"].get("text") or "").replace(" ", "")
+            if all(t in refined for t in alt.split()):   # 남긴 토큰이 그대로 있어야 같은 필지
+                return g, alt
+        raise AddressNotFound(address)
+
     def lookup(self, address: str) -> Parcel:
-        g = self.geocode(address)
+        g, alt = self._geocode_loose(address)
         st = g["refined"]["structure"]
         pnu = st.get("level4LC") or ""
         if len(pnu) != 19:   # 도로명 주소: 검색 API의 id 가 필지 PNU 다
             pnu = self._road_pnu(g["refined"].get("text") or address) or pnu
         p = Parcel(g["refined"].get("text", address), pnu, st.get("level1", ""), st.get("level2", ""))
+        if alt:
+            p.notes.append(f"'{address}'로는 찾지 못해 '{alt}'로 조회했습니다. 실제 주소는 '{p.address}'입니다.")
         if len(pnu) != 19:
             p.notes.append("도로명 주소라 PNU를 확정하지 못했습니다. 지번 주소로 다시 조회하세요.")
             return p

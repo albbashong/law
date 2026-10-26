@@ -1,0 +1,14 @@
+# .containerignore 와 같은 내용 — docker-compose(podman compose 가 부르는 경우)는 이 파일만 읽는다
+# 이미지에는 코드와 설정만 — 데이터·키·가상환경·로그는 넣지 않는다
+.git
+.env
+**/.env
+.venv
+**/.venv
+data
+logs
+eval/results
+.superpowers
+.pytest_cache
+**/__pycache__
+**/*.pyc

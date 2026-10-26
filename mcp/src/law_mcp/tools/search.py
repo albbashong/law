@@ -1,5 +1,7 @@
 """법령·조례 전문 검색 (FTS5 trigram, 공백 제거 색인)."""
+import math
 import re
+from itertools import combinations
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -54,12 +56,36 @@ def _chunks(query: str) -> list[str]:
     return out
 
 
-def _match_exprs(query: str) -> list[str]:
-    """정확도 높은 순서의 검색식 후보: 단어 AND → 이어 붙인 덩어리 AND → 덩어리 OR."""
+def _terms(store, query: str) -> list[tuple[str, str]]:
+    """낱말마다 (낱말, 검색식) — 3글자 이상은 그대로, 2글자는 색인에 있는 '낱말+한 글자' 조각들의 OR."""
+    out = []
+    for w in dict.fromkeys(nospace(t).replace('"', "") for t in query.split()):
+        grams = store.index_grams(w) if len(w) >= 2 else []
+        if grams:
+            out.append((w, f'"{w}"' if len(w) >= 3 else "(" + " OR ".join(f'"{g}"' for g in grams) + ")"))
+    return out
+
+
+def _idf(store, expr: str) -> float:
+    return math.log((store.unit_count() + 1) / (store.body_df(expr) + 1))
+
+
+def _match_exprs(query: str, store=None) -> list[tuple[str, dict | None]]:  # dict: 낱말 → (검색식, 드묾)
+    """정확도 높은 순서의 (검색식, 드묾 가중치) 후보: 낱말 AND → 낱말을 덜어 낸 AND(드문 조합부터) → 이어 붙인 덩어리
+    AND·OR → 낱말 OR(드문 낱말이 많이 든 조문부터) → 3글자 이상 낱말 OR. 가중치가 있으면 그 순으로 줄 세운다."""
     whole = nospace(query).replace('"', "")
     if len(whole) < 3:
         return []
     exprs = []
+    terms = _terms(store, query) if store is not None else []
+    if len(terms) > 1 and any(e.startswith("(") for _, e in terms):
+        exprs.append(" AND ".join(e for _, e in terms))
+    # 모두 든 조문이 없으면 낱말을 덜어 낸다 — 흔한 낱말(과태료·허가)을 뺀 드문 조합부터. 낱말 하나만 남기지는 않는다
+    idf = {w: (e, _idf(store, e)) for w, e in terms} if len(terms) > 1 else {}
+    if 2 < len(terms) <= 5:
+        for k in range(len(terms) - 1, 1, -1):
+            for combo in sorted(combinations(terms, k), key=lambda c: -sum(idf[w][1] for w, _ in c)):
+                exprs.append(" AND ".join(e for _, e in combo))
     words = [nospace(t).replace('"', "") for t in query.split() if len(nospace(t)) >= 3]
     if len(words) > 1:
         exprs.append(" AND ".join(f'"{t}"' for t in words))
@@ -69,10 +95,13 @@ def _match_exprs(query: str) -> list[str]:
     if len(chunks) > 1:
         exprs.append(" AND ".join(f'"{c}"' for c in chunks))
         exprs.append(" OR ".join(f'"{c}"' for c in chunks))
+    if idf:
+        exprs.append((" OR ".join(e for _, e in terms), idf))
     # 짧은 낱말이 붙어 덩어리가 원문에 없으면("수의계약 조건" → "수의계약조건") 3글자 이상 낱말만으로 찾는다
     if words:
         exprs.append(" OR ".join(f'"{t}"' for t in words))
-    return list(dict.fromkeys(exprs))
+    out = [e if isinstance(e, tuple) else (e, None) for e in exprs]
+    return list({e: (e, w) for e, w in out}.values())
 
 
 def _basis_hint(store, query: str, region: str | None) -> dict | None:
@@ -183,7 +212,7 @@ def _title_rows(store, query, doc_ids, source, limit):
 
 
 def _run_law_search(store, query: str, scope: str = "all", region: str | None = None, limit: int = 8) -> dict:
-    exprs = _match_exprs(query)
+    exprs = _match_exprs(query, store)
     if not exprs and len(nospace(query)) < 2:
         return result("failed", {}, "검색어가 너무 짧습니다. 예: '자연녹지지역 공장', '도로점용료'")
     doc_ids = None
@@ -195,21 +224,30 @@ def _run_law_search(store, query: str, scope: str = "all", region: str | None = 
         scope = "ordin"
     source = None if scope == "all" else scope
     rows, seen = [], set()
-    for expr in exprs:                      # 정확한 식부터 — 모자라면 넓은 식으로 채운다
-        for row in _search(store, expr, query, doc_ids, source, limit):
+    for expr, weights in exprs:             # 정확한 식부터 — 모자라면 넓은 식으로 채운다
+        for row in _search(store, expr, query, doc_ids, source, limit, weights):
             if (row["law"], row["article"]) not in seen:
                 seen.add((row["law"], row["article"]))
                 rows.append(row)
         if len(rows) >= limit:
             break
     # 2글자 법령 용어(식비·선물·전용 등)는 trigram 으로 못 찾으므로 제목에서 찾은 것을 앞에 둔다
-    short = any(len(nospace(t)) == 2 for t in query.split())
     inside, titled_all = _title_rows(store, query, doc_ids, source, limit * 2)
+    # 그 2글자 낱말이 실제로 제목에 들었을 때만 — 아니면 흔한 낱말(과태료)만 맞은 제목이 본문에서 찾은 것을 밀어낸다
+    shorts = [nospace(t) for t in query.split() if len(nospace(t)) == 2]
+    short = any(w in nospace(t["title"]) for w in shorts for t in titled_all)
     rows = _merge(rows, titled_all, inside, short)
     rows = rows[: limit * 2]
     if not rows:
         return result("ok", {"결과": []}, f"'{query}'에 맞는 조문이 없습니다. 다른 표현(공식 용어)으로 다시 검색하세요.")
-    return result("ok", {"결과": rows}, f"{len(rows)}건. 원문과 상위·하위 근거는 호출인자로 law_article 을 부르세요.")
+    message = f"{len(rows)}건. 원문과 상위·하위 근거는 호출인자로 law_article 을 부르세요."
+    seen_text = nospace(" ".join(f"{r['law']} {r['title']} {r['snippet']}" for r in rows))
+    absent = [w for w in dict.fromkeys(nospace(t).replace('"', "") for t in query.split())
+              if len(w) >= 2 and w not in seen_text]
+    if absent:
+        message += (f" 검색어 중 {', '.join(repr(w) for w in absent)}은(는) 결과 조문에 나오지 않습니다. 법령은 같은 대상을"
+                    " 다른 용어로 부를 수 있으니, 결과 조문이 쓰는 용어로 바꿔 다시 검색하세요.")
+    return result("ok", {"결과": rows}, message)
 
 
 def _merge(rows, titled_all, inside, short):
@@ -251,9 +289,9 @@ def _article_indeg(store, doc_id, path):
                       (doc_id, top, top + "/*"))["n"]
 
 
-def _ranked(store, units, query):
+def _ranked(store, units, query, weights=None):
     """제목에 검색어 낱말이 든 조문 → 그런 조문이 많은 법령 → 많이 인용되는 법령 → 많이 인용되는 조문 → bm25 순,
-    법령마다 PER_LAW 건."""
+    법령마다 PER_LAW 건. weights(낱말→드묾)가 있으면 본문에 든 낱말의 드묾 합을 맨 앞 기준으로 둔다."""
     from law_mcp.engine.follow import _cited_by
     words = [nospace(t) for t in query.split() if len(nospace(t)) >= 2] or [nospace(query)]
     hits = {u["unit_id"]: sum(w in nospace(u["title"] or "") for w in words) for u in units}
@@ -261,8 +299,10 @@ def _ranked(store, units, query):
     for u in units:
         per_doc[u["doc_id"]] = per_doc.get(u["doc_id"], 0) + (hits[u["unit_id"]] > 0)
     indeg = {u["unit_id"]: _article_indeg(store, u["doc_id"], u["path"]) if hits[u["unit_id"]] else 0 for u in units}
-    units = sorted(units, key=lambda u: (-hits[u["unit_id"]], -per_doc[u["doc_id"]], -_cited_by(store, u["doc_id"]),
-                                         -indeg[u["unit_id"]], u["score"]))
+    cover = {u["unit_id"]: round(sum(v for w, (_, v) in (weights or {}).items() if w in nospace(u["text"])), 1)
+             for u in units}
+    units = sorted(units, key=lambda u: (-cover[u["unit_id"]], -hits[u["unit_id"]], -per_doc[u["doc_id"]],
+                                         -_cited_by(store, u["doc_id"]), -indeg[u["unit_id"]], u["score"]))
     out, seen = [], {}
     for u in units:
         if seen.get(u["doc_id"], 0) < PER_LAW:
@@ -271,9 +311,14 @@ def _ranked(store, units, query):
     return out
 
 
-def _search(store, expr, query, doc_ids, source, limit):
+def _search(store, expr, query, doc_ids, source, limit, weights=None):
     rows = []
-    for u in _ranked(store, store.search_units(expr, doc_ids, source, POOL), query)[:limit]:
+    if weights:     # 낱말마다 따로 모은다 — OR 한 번이면 bm25 상위가 흔한 낱말 조문으로 차서 드문 낱말 조문이 빠진다
+        units = list({u["unit_id"]: u for e, _ in weights.values()
+                      for u in store.search_units(e, doc_ids, source, POOL // len(weights))}.values())
+    else:
+        units = store.search_units(expr, doc_ids, source, POOL)
+    for u in _ranked(store, units, query, weights)[:limit]:
         rows.append({"law": u["law"], "article": u["label"], "title": u["title"] or "",
                      "snippet": _focus_snippet(u["text"], query, u["title"]),
                      "호출인자": {"law": u["law"], "article": u["label"]}})

@@ -1,0 +1,108 @@
+# 지저분한 질문 100개 — 오탈자·구어체·모호·틀린 전제·정보 누락·이어지는 질문·범위 밖.
+# 채점 기준값(must_refs 등)은 두지 않는다. 답을 원문(법령 DB·법제처 API·브이월드)과 문장 단위로 대조해 판정한다.
+# style: normal(정상) typo(오탈자) slang(구어체·줄임말) vague(모호) premise(틀린 전제) missing(정보 누락) multi(이어지는 질문) scope(범위 밖)
+# 주소는 브이월드로 존재를 확인한 지번·도로명만 쓴다.
+
+# ── 건축 인허가 (B) ──
+- {id: B01, kind: build, style: normal, utterance: "서울특별시 종로구 평창동 100에 단독주택 지을 수 있나요?"}
+- {id: B02, kind: build, style: typo, utterance: "경기도 이천시 마장면 이치리 200 에 창고 짖을수 잇나요 건폐율도"}
+- {id: B03, kind: build, style: slang, utterance: "파주 탄현면 법흥리 100 여기 카페 차려도 됨?"}
+- {id: B04, kind: build, style: typo, utterance: "안성시 보개면 북좌리100 농림지역이라던데 주택 지을수잇음? 농지전용두 해야대?"}
+- {id: B05, kind: build, style: normal, utterance: "충청남도 천안시 동남구 광덕면 대덕리 100에 공장을 짓고 싶은데 가능한지와 용적률을 알려주세요."}
+- {id: B06, kind: build, style: slang, utterance: "당진 송악읍 한진리 100 ㄱㄴ? 물류창고"}
+- {id: B07, kind: build, style: typo, utterance: "충주시 앙성면 중전리 100번지 펜션 할려는데 숙박시설 되요?"}
+- {id: B08, kind: build, style: normal, utterance: "전라남도 순천시 해룡면 신대리 100에 음식점 지을 수 있나요?"}
+- {id: B09, kind: build, style: slang, utterance: "나주 금천면 원곡리 100 축사 지어도 되냐"}
+- {id: B10, kind: build, style: typo, utterance: "해남군 화산면 방축리 100 자연녹지 라는데 단독주택 건페율 얼마임"}
+- {id: B11, kind: build, style: normal, utterance: "전북특별자치도 완주군 봉동읍 낙평리 100에 다가구주택 지을 수 있어?"}
+- {id: B12, kind: build, style: slang, utterance: "김제 백구면 영상리 100 여기 공장 ㄱㄱ 가능?"}
+- {id: B13, kind: build, style: vague, utterance: "구미시 산동읍 인덕리 100 뭐 지을 수 있어?"}
+- {id: B14, kind: build, style: typo, utterance: "상주시 함창읍 구향리 100 에 편의점 낼수있나요 근린생활시설 맞죠?"}
+- {id: B15, kind: build, style: normal, utterance: "경상남도 김해시 진영읍 본산리 100에 제조업 공장 신축이 가능한가요?"}
+- {id: B16, kind: build, style: slang, utterance: "밀양 삼랑진 송지리 100 창고 하나 올릴라는데 됨?"}
+- {id: B17, kind: build, style: typo, utterance: "거제시 사등면 사곡리 100 여기 원룸건물 (다세대) 지울수있나"}
+- {id: B18, kind: build, style: normal, utterance: "강원특별자치도 홍천군 화촌면 구성포리 100에 단독주택 지을 수 있는지와 건폐율·용적률 근거 조문을 알려줘."}
+- {id: B19, kind: build, style: slang, utterance: "원주 문막읍 동화리 100 공장 됨? 배출시설설치제한지역이라던데 그것도 걸림?"}
+- {id: B20, kind: build, style: typo, utterance: "평창 봉평면 무이리 100 계획관리인데 공장설립제한지역이래요 공장 안대나요"}
+- {id: B21, kind: build, style: normal, utterance: "서울특별시 강남구 테헤란로 152에 숙박시설 지을 수 있나요?"}
+- {id: B22, kind: build, style: slang, utterance: "마포구 월드컵북로 400 노래방 차리면 됨?"}
+- {id: B23, kind: build, style: typo, utterance: "은평구 진관동 100 준주거지역 오피스텔 가능한지 용적율도"}
+- {id: B24, kind: build, style: normal, utterance: "부산광역시 기장군 정관읍 용수리 100에 주택을 지을 수 있나요? 지목이 도로라던데요."}
+- {id: B25, kind: build, style: vague, utterance: "울주군 상북면 궁근정리 100 묘지라는데 여기 집 됨?"}
+- {id: B26, kind: build, style: typo, utterance: "강화군 길상면 온수리 100 논인데 창고 지을려면 머 해야되요"}
+- {id: B27, kind: build, style: normal, utterance: "광주광역시 광산구 삼도동 100에 단독주택 지을 수 있나요?"}
+- {id: B28, kind: build, style: slang, utterance: "대전 유성구 구룡동 100 임야임 전원주택 ㄱㄴ?"}
+- {id: B29, kind: build, style: typo, utterance: "성남 분당구 정자동 100 하천이라는데 건물 지을수잇음?"}
+- {id: B30, kind: build, style: normal, utterance: "경기도 고양시 일산동구 장항동 100에 학원 건물 지을 수 있나요?"}
+- {id: B31, kind: build, style: slang, utterance: "남양주 조안면 삼봉리 100 카페 가능? 규제 엄청 많던데"}
+- {id: B32, kind: build, style: typo, utterance: "가평 청평면 청평리 100 숙박업 펜션 되나요 자연녹지래요"}
+- {id: B33, kind: build, style: normal, utterance: "경기도 용인시 처인구 원삼면 고당리 100에 공장 지을 수 있나요?"}
+- {id: B34, kind: build, style: typo, utterance: "양평 양서면 양수리 100 식당 할수있나 수질보전 머 어쩌구 지역이던데"}
+- {id: B35, kind: build, style: normal, utterance: "경기도 여주시 가남읍 태평리 100에 제1종 근린생활시설 지을 수 있어?"}
+- {id: B36, kind: build, style: slang, utterance: "전주 완산구 효자로 225 여기 술집 ㄱㄴ"}
+- {id: B37, kind: build, style: normal, utterance: "경상남도 창원시 의창구 중앙대로 300에 공장 지을 수 있나요?"}
+- {id: B38, kind: build, style: typo, utterance: "제주시 문연로 6 공장 지을수잇나요 공장설립제한지역 이라던디"}
+- {id: B39, kind: build, style: normal, utterance: "세종특별자치시 한누리대로 2130에 단독주택을 지을 수 있나요? 용적률도 알려주세요."}
+- {id: B40, kind: build, style: slang, utterance: "화성 남양읍 시청로 159 창고 됨?"}
+- {id: B41, kind: build, style: missing, utterance: "우리 땅에 공장 지을 수 있어?"}
+- {id: B42, kind: build, style: missing, utterance: "자연녹지지역에 카페 되나요?"}
+- {id: B43, kind: build, style: premise, utterance: "농림지역은 건폐율 80%라던데 맞죠? 안성시 기준으로"}
+- {id: B44, kind: build, style: premise, utterance: "건축법 제200조에 따르면 계획관리지역에 공장 못 짓는다던데 사실이야?"}
+- {id: B45, kind: build, style: typo, utterance: "영천시 금호읍 신월리 1-51번지 용도지역이 머에요 그리고 거기 축사됨?"}
+- {id: B46, kind: build, style: multi, turns: ["이천시 마장면 이치리 200 창고 지을 수 있어?", "그럼 거기 공장은?", "면적이 1000제곱미터면 연면적 최대 얼마까지 돼?"]}
+- {id: B47, kind: build, style: multi, turns: ["천안 광덕면 대덕리 100 단독주택 가능?", "논이면 따로 허가 받아야 해?"]}
+- {id: B48, kind: build, style: multi, turns: ["순천 해룡면 신대리 100 용적률 얼마야", "건폐율은?"]}
+- {id: B49, kind: build, style: premise, utterance: "전라남도 순천시 자연녹지지역 용적률 알려줘"}
+- {id: B50, kind: build, style: scope, utterance: "평창 봉평면 무이리 100 땅값 얼마고 지금 사면 오를까?"}
+
+# ── 생활 법령 (L) ──
+- {id: L01, kind: general, style: normal, utterance: "공원에서 비둘기한테 먹이 주면 과태료 나오나요?"}
+- {id: L02, kind: general, style: slang, utterance: "길에서 담배 피면 벌금 몇임"}
+- {id: L03, kind: general, style: typo, utterance: "아파트 층간소음 신고하면 머가 어떻게 되나여"}
+- {id: L04, kind: general, style: normal, utterance: "반려견 산책할 때 목줄 안 하면 과태료가 얼마인가요?"}
+- {id: L05, kind: general, style: slang, utterance: "음주운전 0.03이면 면허 취소임 정지임?"}
+- {id: L06, kind: general, style: typo, utterance: "쓰래기 무단투기 하면 과태료 얼마에요"}
+- {id: L07, kind: general, style: normal, utterance: "전세 계약 끝났는데 집주인이 보증금을 안 돌려주면 어떤 법으로 대응할 수 있나요?"}
+- {id: L08, kind: general, style: vague, utterance: "알바 주휴수당 못받음 이거 신고됨?"}
+- {id: L09, kind: general, style: normal, utterance: "드론을 공원에서 날려도 되나요?"}
+- {id: L10, kind: general, style: typo, utterance: "개인형이동장치 킥보드 헬멧 안쓰면 범칙금 잇어요?"}
+- {id: L11, kind: general, style: slang, utterance: "캠핑장 아닌데 강가에서 텐트치고 고기 구워먹으면 걸림?"}
+- {id: L12, kind: general, style: premise, utterance: "자연공원법에 따라 도시공원에서 술 마시면 과태료라던데 얼마야?"}
+- {id: L13, kind: general, style: premise, utterance: "도로교통법 제500조 위반이면 어떻게 되나요?"}
+- {id: L14, kind: general, style: normal, utterance: "식당에서 원산지 표시를 안 하면 어떤 처벌을 받나요?"}
+- {id: L15, kind: general, style: typo, utterance: "청소년한테 술 팔면 영업정지 몇일이에요"}
+- {id: L16, kind: general, style: vague, utterance: "옆집이 나무를 베서 우리 담장이 부서졌어 이거 어떻게 해?"}
+- {id: L17, kind: general, style: slang, utterance: "주차장 아닌데 인도에 차 대면 과태료 얼마"}
+- {id: L18, kind: general, style: normal, utterance: "건물 옥상에 태양광 패널 설치하려면 허가가 필요한가요?"}
+- {id: L19, kind: general, style: typo, utterance: "야생동물 먹이주기 금지 법 잇나요 고라니 같은거"}
+- {id: L20, kind: general, style: normal, utterance: "공무원이 직무와 관련 없는 사람에게 10만원짜리 선물을 받아도 되나요?"}
+- {id: L21, kind: general, style: scope, utterance: "작년에 받은 교통 범칙금 대법원 판례로 뒤집을 수 있음?"}
+- {id: L22, kind: general, style: scope, utterance: "양도소득세 계산해줘 5억에 사서 8억에 팔았어"}
+- {id: L23, kind: general, style: scope, utterance: "오늘 저녁 메뉴 추천해줘"}
+- {id: L24, kind: general, style: slang, utterance: "전동킥보드 둘이 타면 ㅈ됨?"}
+- {id: L25, kind: general, style: normal, utterance: "개인정보가 유출됐을 때 회사는 언제까지 이용자에게 알려야 하나요?"}
+- {id: L26, kind: general, style: typo, utterance: "농지 주말체험영농 할려면 얼마까지 땅 살수있어요"}
+- {id: L27, kind: general, style: vague, utterance: "불법건축물이면 어떻게 돼?"}
+- {id: L28, kind: general, style: normal, utterance: "건축물 용도변경을 하려면 허가를 받아야 하나요, 신고만 하면 되나요?"}
+- {id: L29, kind: general, style: slang, utterance: "편의점에서 술 몇시까지 팔 수 있음? 제한 있나"}
+- {id: L30, kind: general, style: premise, utterance: "산에서 나물 캐는 건 완전 합법이잖아? 근거 법 알려줘"}
+- {id: L31, kind: general, style: typo, utterance: "하천에서 낚시하면 불법인가여 허가 필요함?"}
+- {id: L32, kind: general, style: normal, utterance: "아파트 베란다를 확장하려면 어떤 절차가 필요한가요?"}
+- {id: L33, kind: general, style: vague, utterance: "신고하면 어떻게 돼?"}
+- {id: L34, kind: general, style: normal, utterance: "근로자를 해고하려면 며칠 전에 알려야 하나요?"}
+- {id: L35, kind: general, style: slang, utterance: "고속도로 갓길 주행 걸리면 얼마?"}
+- {id: L36, kind: general, style: typo, utterance: "무허가로 컨테이너 집 놓으면 철거 대상인가요 농막이랑 머가 달라요"}
+- {id: L37, kind: general, style: normal, utterance: "농막을 설치할 때 면적 제한이 있나요?"}
+- {id: L38, kind: general, style: premise, utterance: "국토의 계획 및 이용에 관헌 법률 제76조 내용 알려줘"}
+- {id: L39, kind: general, style: typo, utterance: "건축법 제11조 허가권자가 누구에요 특별시장이랑 시장 군수 차이"}
+- {id: L40, kind: general, style: normal, utterance: "개발행위허가를 받아야 하는 행위에는 어떤 것들이 있나요?"}
+- {id: L41, kind: general, style: multi, turns: ["철수가 공원에서 빵을 흘렸는데 비둘기가 먹었어. 누가 신고하면 어떻게 됨?", "고의성이 없어도 처벌돼?"]}
+- {id: L42, kind: general, style: multi, turns: ["반려견 목줄 안 하면 과태료 얼마야?", "그럼 맹견이면 달라?", "입마개는?"]}
+- {id: L43, kind: general, style: multi, turns: ["농막 설치 기준 알려줘", "거기서 잠 자도 돼?"]}
+- {id: L44, kind: general, style: multi, turns: ["음주운전 처벌 기준 알려줘", "자전거도 해당돼?"]}
+- {id: L45, kind: general, style: multi, turns: ["층간소음 기준이 법에 있어?", "밤에는 몇 데시벨이야?"]}
+- {id: L46, kind: general, style: slang, utterance: "ㅇㅇ시 공원에서 버스킹 해도 됨?"}
+- {id: L47, kind: general, style: typo, utterance: "공원에 텐트 치는거 조래로 금지되잇나요 서울시"}
+- {id: L48, kind: general, style: normal, utterance: "고양시 도시공원에서 금지되는 행위가 뭐가 있나요?"}
+- {id: L49, kind: general, style: premise, utterance: "청탁금지법상 식사는 10만원까지 되는 거 맞지?"}
+- {id: L50, kind: general, style: vague, utterance: "이거 불법임?"}

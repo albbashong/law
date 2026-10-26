@@ -51,6 +51,25 @@ SELinux 서버를 위해 볼륨에 `:z` 를 붙여 두었다.
 - 법령 DB: 새 `lawdb.sqlite` 를 옆에 받아 두었다가 이름을 바꿔 끼우고 `podman compose restart law-mcp`.
   (교체하는 동안 디스크가 DB 하나만큼 더 필요하다.)
 
+### 법령 DB 자동 갱신 (예약)
+
+개발 서버에서 직접 법제처 개정분을 받아 DB 를 다시 만들고 law-mcp 를 재시작한다.
+
+```bash
+# 한 번만: 받아 둔 원문을 옮긴다 — 없으면 조례 16만 건을 처음부터 받는다 (≈3GB)
+rsync -avP <원본 서버>:/home/ubuntu/permit/law/data/{law,ordin,links} data/
+# 저장소 루트 .env 에 LAW_API_OC=<법제처 OC> , 호스트에 uv 설치
+
+scripts/install_update_schedule.sh              # 매주 일요일 03:00 (cron, 없으면 systemd 타이머)
+scripts/scheduled_update.sh                     # 지금 한 번 돌려 보기
+scripts/install_update_schedule.sh --remove     # 예약 지우기
+```
+
+- 시각: `CRON="0 3 * * 0"`(cron) / `ON_CALENDAR="Sun *-*-* 03:00:00"`(systemd) 로 바꾼다.
+- 재시작에 쓰는 compose 도구는 `podman-compose` 가 있으면 그것, 없으면 `podman compose` — 띄울 때와 다르면 `COMPOSE=...` 로 고정한다.
+- 지난 갱신이 아직 돌고 있으면 건너뛰고, 디스크 여유가 DB 하나 + 2GB 보다 적으면 시작하지 않는다.
+- 로그: `logs/scheduled_update.log`(예약 실행), `logs/update-*.log`(단계별, 60일 보관).
+
 ## 4. 로그
 
 ```bash

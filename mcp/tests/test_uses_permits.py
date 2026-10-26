@@ -63,3 +63,22 @@ def test_permits_for_use_term(store):
 def test_development_permit_found_by_title(store):
     r = development_permit(store)
     assert (r.law, r.article) == ("국토의 계획 및 이용에 관한 법률", "제56조")
+
+
+def test_use_list_shows_every_facility_the_law_enumerates(store):
+    # 목 머리에 열거된 시설을 모두 — "러. 안마시술소, 노래연습장" 의 노래연습장도 고를 수 있어야 한다.
+    # 설명형 목("…일용품을 판매하는 소매점으로서 …")은 설명이 가리키는 시설(소매점)으로
+    from law_mcp.engine.uses import facility_terms
+    assert facility_terms("러. 안마시술소, 노래연습장") == ["안마시술소", "노래연습장"]
+    assert facility_terms("차. 장의사, 동물병원, 그 밖에 이와 유사한 것") == ["장의사", "동물병원"]
+    assert facility_terms("가. 일반숙박시설 및 생활숙박시설(「공중위생관리법」 제3조제1항 전단에 따라") == ["일반숙박시설", "생활숙박시설"]
+    assert facility_terms("가. 식품·잡화·의류·완구·서적·건축자재·의약품·의료기기 등 일용품을 판매하는 소매점으로서 같은 건축물에") == ["소매점"]
+    assert facility_terms("다. 자동차영업소로서 같은 건축물에 해당 용도로 쓰는 바닥면적의 합계가 1천 제곱미터 미만인 것") == ["자동차영업소"]
+    assert facility_terms("나. 휴게음식점, 제과점 등 음료·차(茶)·음식·빵·떡·과자 등을 조리하거나 제조하여 판매하는 시설") == ["휴게음식점", "제과점"]
+    assert facility_terms("머. 「물류시설의 개발 및 운영에 관한 법률」 제2조제5호의2에 따른 주문배송시설로서 같은 건축물에") == ["주문배송시설"]
+
+
+def test_match_use_by_a_later_enumerated_facility_and_late_mok_letter(store):
+    hit = match_use(store, "노래연습장")[0]
+    assert hit["ho"] == "4" and hit["label"].endswith("러목") and hit["term"] == "노래연습장"
+    assert match_use(store, "제4호러목")[0]["label"].endswith("러목")

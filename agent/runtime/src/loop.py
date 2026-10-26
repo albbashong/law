@@ -150,8 +150,8 @@ _EMPTY_QUESTION_TEXT = "question 이 비었습니다. 사용자에게 보일 질
 _ASKED_TEXT = "사용자에게 물었습니다: {question}"
 _NOT_EXECUTED_TEXT = "실행하지 않았습니다 — 먼저 사용자에게 물었습니다."
 REPEAT_TEXT = (
-    "같은 호출을 반복하고 있습니다({name}, {n}회). "
-    "다른 인자를 쓰거나, 정보가 부족하면 ask_user 로 물으세요."
+    "같은 호출을 반복하고 있습니다({name}, {n}회). 같은 인자로는 같은 결과입니다. "
+    "앞 결과의 제안·안내대로 인자를 바꾸거나 다른 도구로 찾고, 정보가 부족하면 ask_user 로 물으세요."
 )
 #: 연결 불통으로 볼 httpx/httpcore 예외 이름. 모듈까지 함께 본다(이름만 보면 다른 라이브러리의
 #: 같은 이름과 섞인다).
@@ -186,6 +186,14 @@ def args_hash(args: Mapping[str, Any]) -> str:
     """(도구, 인자) 반복을 세는 키. 키 순서와 무관하다."""
     body = json.dumps(dict(args), sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
+
+
+def result_marks(text: str) -> set[str]:
+    """결과의 근거 표지(인용 패턴에 맞는 조문 번호들) — 표현만 바꾼 호출이 새 근거를 냈는지 본다.
+    패턴이 없으면 결과 전체가 하나의 표지다."""
+    if not settings.answer_cite_pattern:
+        return {hashlib.sha1(text.encode()).hexdigest()}
+    return {re.sub(r"\s+", "", m.group(0)) for m in re.finditer(settings.answer_cite_pattern, text)}
 
 
 def _failure(tool: str, exc: BaseException, attempts: int) -> dict[str, Any]:
@@ -401,6 +409,34 @@ def unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, .
         name = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
         if name and re.sub(r"\s+", "", name) not in corpus and name not in out:
             out.append(name)
+    return out
+
+
+def _bare(text: str) -> str:
+    """글자·숫자만 — 인용 대조용. JSON 에 실린 줄바꿈 표기(\\n)는 먼저 띄어 쓴다."""
+    return re.sub(r"[^\w]|_", "", re.sub(r"\\[nrt]", " ", text))
+
+
+def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
+    """답의 따옴표 인용문(ANSWER_QUOTE_PATTERN) 중 도구 결과·사용자 발화에 그대로 없는 것.
+
+    조문 번호가 적힌 줄만 보고, 공백·문장부호는 무시하며, 줄임표(… ...)로 줄인 인용은 조각마다 본다. ANSWER_QUOTE_MIN_CHARS 보다 짧은
+    조각(낱말 하나를 따옴표로 묶은 것)은 보지 않는다.
+    """
+    pattern = settings.answer_quote_pattern
+    if not pattern or not answer:
+        return []
+    corpus = "".join(_bare(str(m.get("content") or ""))
+                     for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip)
+    # 조문 번호(ANSWER_CITE_PATTERN)가 함께 적힌 줄의 인용만 원문 인용으로 본다 — 질문을 따옴표로 다시 적은 것은 뺀다
+    lines = [ln for ln in answer.splitlines()
+             if not settings.answer_cite_pattern or re.search(settings.answer_cite_pattern, ln)]
+    out: list[str] = []
+    for hit in re.findall(pattern, "\n".join(lines)):
+        quote = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
+        parts = [_bare(x) for x in re.split(r"…|\.{3,}", quote)]
+        if any(len(x) >= settings.answer_quote_min_chars and x not in corpus for x in parts) and quote not in out:
+            out.append(quote)
     return out
 
 
@@ -670,7 +706,12 @@ async def run_query(
         usage_total = {"tokens_in": 0, "tokens_out": 0}
         failures: list[dict[str, Any]] = []
         attempts: dict[tuple[str, str], int] = {}
+        marks: dict[str, set[str]] = {}            # 도구별로 지금까지 결과에 나온 근거 표지
+        stale: dict[str, int] = {}                 # 새 근거 없이 끝난 호출 수
         calls_made: list[dict[str, Any]] = []      # 작업 기억에 남길 성공한 호출
+        pick: tuple[str, str] | None = None        # 모델이 목록에서 골라 다시 불러야 하는 (도구, 목록 키)
+        pick_sent_back = False
+        mentions: list[str] = []                   # 도구가 답에 꼭 나와야 한다고 표시한 이름(필지 규제 등)
 
         def done(stopped: str, answer: str = "", **extra: Any) -> dict[str, Any]:
             return {
@@ -693,7 +734,7 @@ async def run_query(
         for label, exc in (report_dead() if callable(report_dead) else {}).items():
             failures.append(_failure(label, McpUnavailable(label, exc), 1))
 
-        cite_checked = reviewed = False
+        cite_checked = reviewed = force_answer = False
         story_wanted = replayed = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
@@ -707,7 +748,11 @@ async def run_query(
                 logger.info("domains: %s", on)
                 shown = on
             messages[0] = {"role": "system", "content": with_domains(system_prompt, on)}
-            step = await model.next_step(messages, tools)
+            if round_idx == rounds_max - 1 and round_idx > 0 and not force_answer and calls_made:
+                force_answer = True     # 라운드 상한에서 실패하지 않고 찾은 만큼 답한다
+                messages.append({"role": "user", "content": settings.last_round_text})
+            step = await model.next_step(messages, [] if force_answer else tools)
+            force_answer = False
             step_usage = step.get("usage") or {}
             usage_total["tokens_in"] += step_usage.get("tokens_in") or 0
             usage_total["tokens_out"] += step_usage.get("tokens_out") or 0
@@ -716,15 +761,20 @@ async def run_query(
                 bad = ungrounded(step["answer"], messages, cite_notes)
                 bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
                 bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
+                bad += [f"“{x}”" for x in misquoted(step["answer"], messages, cite_notes) if f"“{x}”" not in bad]
                 off = rate_unmatched(step["answer"], messages, cite_notes) if settings.answer_rate_check else []
+                missed = [m for m in mentions if _bare(m) not in _bare(step["answer"])]
+                if missed and not cite_checked and round_idx + 1 < rounds_max:
+                    logger.info("answer check: missing mentions=%s", missed)
                 # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
                 if bad or off:
                     logger.info("answer check: cites=%s rates=%s retry=%s", bad, off, not cite_checked)
-                if (bad or off) and not cite_checked and round_idx + 1 < rounds_max:
+                if (bad or off or missed) and not cite_checked and round_idx + 1 < rounds_max:
                     cite_checked = True
                     messages.append({"role": "assistant", "content": step["answer"]})
                     note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(bad))] if bad else [])
-                                    + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else []))
+                                    + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else [])
+                                    + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else []))
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
                     continue
@@ -751,6 +801,7 @@ async def run_query(
 
             calls = _tool_calls_from_step(step)
             messages.append(_assistant_message(step, calls))
+            blocked = 0
 
             for i, call in enumerate(calls):
                 name = call["name"]
@@ -769,6 +820,12 @@ async def run_query(
                     ask = ask_from(args)
                     if not ask["question"]:
                         feed(_EMPTY_QUESTION_TEXT)
+                        continue
+                    # 도구가 골라서 다시 부르라고 한 목록을 사용자에게 넘기려 하면 한 번 돌려보낸다
+                    if pick and not pick_sent_back:
+                        pick_sent_back = True
+                        logger.info("ask after pick list from %s — sent back", pick[0])
+                        feed(settings.pick_retry_text.format(name=pick[0], key=pick[1]))
                         continue
                     feed(_ASKED_TEXT.format(question=ask["question"]))
                     # 같은 라운드에 남은 호출은 실행하지 않는다 — 짝 없는 tool_calls 를
@@ -794,6 +851,7 @@ async def run_query(
                 attempts[key] = attempts.get(key, 0) + 1
                 if attempts[key] > settings.tool_retry_max:
                     feed(REPEAT_TEXT.format(name=name, n=attempts[key]))
+                    blocked += 1
                     continue
 
                 if on_progress is not None:
@@ -820,7 +878,27 @@ async def run_query(
                 if (made := {"tool": name, "args": dict(args)}) not in calls_made:
                     calls_made.append(made)
                 failures[:] = [f for f in failures if f["tool"] != name]  # 풀린 오류는 안 보인다
-                feed(_for_model(result))
+                if isinstance(result, Mapping) and isinstance(result.get(settings.pick_key), str):
+                    pick = (name, result[settings.pick_key])
+                elif pick and pick[0] == name:
+                    pick = None
+                if isinstance(result, Mapping) and isinstance(result.get(settings.mention_key), list):
+                    mentions += [m for m in result[settings.mention_key] if isinstance(m, str) and m not in mentions]
+                fed = _for_model(result)
+                found = result_marks(fed)
+                if found and found <= marks.get(name, set()):
+                    stale[name] = stale.get(name, 0) + 1
+                    if stale[name] >= settings.tool_retry_max:
+                        fed += "\n" + settings.same_result_text.format(name=name, n=stale[name] + 1)
+                        blocked += 1
+                marks[name] = marks.get(name, set()) | found
+                feed(fed)
+
+            # 이번 라운드의 호출이 모두 반복이라 막혔다 — 다음 라운드는 도구 없이 지금까지 조회한 것으로 답하게 한다
+            if calls and blocked == len(calls):
+                logger.info("all calls blocked as repeats — answer round without tools")
+                force_answer = True
+                messages.append({"role": "user", "content": settings.repeat_answer_text})
 
             # 앞 답을 이야기로 — 그 턴의 조회를 런타임이 그대로 다시 실행해 같은 범위의 근거를 놓는다.
             # 결과마다 가짜 tool_call 과 짝을 지어 둔다(짝 없는 tool 메시지는 모델 API 가 거부한다).

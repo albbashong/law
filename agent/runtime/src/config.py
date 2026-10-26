@@ -125,6 +125,11 @@ class Settings(BaseSettings):
         description="검증에 걸린 인용을 모델에 되돌릴 때 쓰는 문장. {cites} 자리에 인용 목록.",
     )
 
+    answer_quote_pattern: str = Field(
+        default="",
+        description="답변에서 따옴표 인용문을 잡는 정규식(비지 않은 그룹이 인용문). 조문 번호(ANSWER_CITE_PATTERN)가 적힌 줄의 인용문이 이번 대화의 도구 결과·사용자 "
+        "발화에 그대로 없으면(공백·문장부호 무시, 줄임표로 줄인 곳은 조각마다) 인용처럼 되돌린다. 비우면 검증하지 않는다.")
+    answer_quote_min_chars: int = Field(default=6, description="이보다 짧은 인용 조각(따옴표로 묶은 낱말)은 대조하지 않는다.")
     answer_law_pattern: str = Field(
         default="",
         description="답변에서 법령명을 잡는 정규식(비지 않은 그룹이 이름). 이름이 이번 대화의 도구 결과·사용자 발화에 "
@@ -133,6 +138,32 @@ class Settings(BaseSettings):
     answer_strip_pattern: str = Field(
         default="", description="최종 답변에서 지울 표기의 정규식(예: 모델이 본문에 흘린 도구 호출 표기). 비우면 그대로 둔다.")
 
+    repeat_answer_text: str = Field(
+        default="같은 도구 호출이 되풀이되어 더 조회하지 않습니다. 지금까지 조회한 결과만으로 답하세요. 확인하지 못한 "
+        "부분은 무엇을 찾아봤고 무엇을 확인하지 못했는지 밝히고, 조회 결과에 없는 조문은 인용하지 않습니다.",
+        description="한 라운드의 호출이 모두 반복이라 막혔을 때, 도구 없이 답하게 하는 다음 라운드의 지시.")
+    same_result_text: str = Field(
+        default="앞의 {name} 결과에서 새로 나온 근거가 없습니다({n}회). 표현만 바꿔서는 같은 결과입니다. 결과에 나온 조문의 "
+        "원문을 열어 보거나, 법령이 쓰는 정식 용어로 찾거나, 지금까지 조회한 것으로 답하세요.",
+        description="표현만 바꾼 호출이 새 근거 없이 같은 결과를 되풀이할 때 결과 뒤에 붙이는 안내. 횟수가 "
+        "TOOL_RETRY_MAX 를 넘으면 반복으로 막힌 것처럼 센다(라운드 전부가 그러면 도구 없이 답하는 라운드).")
+    pick_key: str = Field(
+        default="pick",
+        description="도구 결과에서 '사용자에게 묻기 전에 모델이 목록에서 골라 다시 부르라'는 표시의 키. 값은 고를 목록이 "
+        "든 facts 키 이름이다. 이 결과 뒤에 모델이 다시 부르지 않고 ask_user 로 고르게 하면 한 번 돌려보낸다.")
+    mention_key: str = Field(default="mention", description="도구 결과에서 '답에 꼭 나와야 할 이름'(필지에 걸린 규제 등) 목록의 키. 모델에게는 보이지 않는다.")
+    mention_retry_text: str = Field(
+        default="조회 결과에 나온 다음 규제가 답변에 빠졌습니다: {names}. 각 규제가 결론에 영향을 주는지 결과의 근거 조문으로 "
+        "확인해 답변에 반영하고 다시 답하세요.",
+        description="mention 목록의 이름이 답에 없을 때 한 번 되돌리며 주는 안내. {names} 자리에 빠진 이름.")
+    pick_retry_text: str = Field(
+        default="아직 사용자에게 묻지 않았습니다. 앞의 {name} 결과는 사용자가 아니라 당신이 '{key}'에서 질문의 뜻에 가장 "
+        "가까운 것을 골라 다시 호출하라고 했습니다. 하나 골라 {name} 를 다시 부르고, 답변에 어떻게 해석했는지 밝히세요.",
+        description="pick 표시가 있는 결과 뒤 ask_user 를 한 번 돌려보낼 때 주는 안내.")
+    last_round_text: str = Field(
+        default="조회할 수 있는 횟수의 끝입니다. 더 조회하지 말고 지금까지 조회한 결과만으로 답하세요. 확인하지 못한 "
+        "부분은 무엇을 찾아봤고 무엇을 확인하지 못했는지 밝히고, 조회 결과에 없는 조문은 인용하지 않습니다.",
+        description="마지막 라운드(ROUNDS_MAX)에 도구 없이 답하게 하는 지시 — 라운드 상한 실패 대신 찾은 만큼 답한다.")
     answer_review_prompt: str = Field(
         default="", description="답 점검 지시 파일(AGENT_DIR 기준). 인용·수치 검증을 통과한 답을 조회 원문과 대조해 JSON "
         "{ANSWER_REVIEW_KEY: [고칠 점]} 으로 답하게 하고, 고칠 점이 있으면 한 번 되돌린다. 비우면 점검하지 않는다.")

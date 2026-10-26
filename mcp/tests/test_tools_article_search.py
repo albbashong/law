@@ -22,6 +22,16 @@ def test_article_unknown_law_suggests(store):
     assert r["status"] == "failed" and r["facts"]["제안"]
 
 
+def test_article_fixes_a_one_letter_slip_in_the_law_name(store):
+    # 이름이 한 글자만 다르고 가장 가까운 법령이 뚜렷하면 그 법령으로 조회하고, 보정했다고 밝힌다
+    r = run_law_article(store, "국토의 계획 및 이용에 관헌 법률", "제76조")
+    assert r["status"] in ("ok", "partial")
+    assert r["facts"]["법령"] == "국토의 계획 및 이용에 관한 법률"
+    assert "국토의 계획 및 이용에 관헌 법률" in r["facts"]["법령명_보정"]
+    # 멀면 고치지 않는다
+    assert run_law_article(store, "없는법률이름입니다", "제1조")["status"] == "failed"
+
+
 def test_article_missing_article(store):
     r = run_law_article(store, "건축법", "제999조")
     assert r["status"] == "failed" and "제999조" in r["message"]
@@ -295,3 +305,39 @@ def test_opening_a_paragraph_lists_its_siblings(store):
 def test_whole_article_has_no_sibling_list(store):
     r = run_law_article(store, "건축법 시행령", "제28조", chain="none")
     assert "같은_조_다른_항목" not in r["facts"]
+
+
+def test_two_letter_word_found_in_body_text_beside_a_common_word(store):
+    # 2글자 낱말이 제목엔 없고 본문에만 있으면 trigram 으로 못 찾아 흔한 낱말(허가)의 조문만 나왔다
+    # — 색인 낱말 목록에서 그 낱말로 시작하는 3글자 조각을 찾아 본문에서 찾는다
+    rows = run_law_search(store, "묘지 허가")["facts"]["결과"]
+    assert any("묘지" in r["snippet"] for r in rows[:5]), [r["article"] for r in rows]
+
+
+def test_index_grams_of_a_two_letter_word(store):
+    grams = store.index_grams("묘지")
+    assert grams and all(g.startswith("묘지") and len(g) == 3 for g in grams)
+    assert store.index_grams("없는말") == ["없는말"]
+
+
+def test_search_says_which_query_word_no_result_contains(store):
+    # 법령이 쓰지 않는 일상어(헬멧)는 찾을 수 없다 — 그 낱말이 결과 어디에도 없다고 사실을 알린다
+    r = run_law_search(store, "헬멧 건축물")
+    assert "헬멧" in r["message"] and "용어" in r["message"]
+    r = run_law_search(store, "자연녹지지역 공장")
+    assert "나오지 않습니다" not in r["message"]
+
+
+def test_ordinance_article_citing_no_law_goes_up_through_the_official_link(store):
+    # 위원회 구성처럼 법령을 직접 인용하지 않는 조례 조문 — 법제처 연계가 유일한 상위 단서다
+    r = run_law_article(store, "서울특별시 도시계획 조례", "제54조")
+    ups = [(x["law"], x["article"], x["note"]) for x in r["facts"]["refs"]]
+    assert any(law == "국토의 계획 및 이용에 관한 법률" and "법제처 연계" in note for law, _, note in ups), ups
+
+
+def test_other_family_law_cited_by_a_decree_is_not_its_upper_law(store):
+    # 건축법 시행령이 국토계획법을 인용해도 위임 근거(상위)는 건축법 쪽이다
+    r = run_law_article(store, "건축법 시행령", "제107조", depth=1)
+    notes = {(x["law"], x["note"]) for x in r["facts"]["refs"]}
+    assert ("국토의 계획 및 이용에 관한 법률", "상위") not in notes, notes
+    assert any(law == "건축법" and note == "상위" for law, note in notes), notes

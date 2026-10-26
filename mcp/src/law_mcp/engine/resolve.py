@@ -43,6 +43,31 @@ def suggest(store, name: str, n: int = 5) -> list[str]:
     return difflib.get_close_matches(name, names, n=n, cutoff=0.5)
 
 
+def close_name(store, name: str, ratio: float, margin: float) -> str | None:
+    """못 찾은 법령명과 글자가 뚜렷이 가장 닮은 법령명 하나 — 닮음 ratio 이상, 다음 후보보다 margin 앞설 때만."""
+    if ratio <= 0:
+        return None
+    key = name_key(name)
+    if len(key) < 4:
+        return None
+    names = _names_cache.get(id(store))
+    if names is None:
+        names = [r["name"] for r in store._all("SELECT name FROM doc")]
+        _names_cache[id(store)] = names
+    sm, floor, scored = difflib.SequenceMatcher(), ratio - margin, []
+    sm.set_seq2(key)
+    for n in set(names):          # 빠른 상한으로 먼저 거른다 — 법령·조례 이름이 16만 개가 넘는다
+        sm.set_seq1(name_key(n))
+        if sm.real_quick_ratio() >= floor and sm.quick_ratio() >= floor and (r := sm.ratio()) >= floor:
+            scored.append((r, n))
+    scored = sorted(scored, reverse=True)[:2]
+    if not scored or scored[0][0] < ratio:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < margin:
+        return None
+    return scored[0][1]
+
+
 def parse_article(s: str) -> str | None:
     t = re.sub(r"\s+", "", s or "")
     m = re.match(r"^별표(\d+)(?:의(\d+))?(.*)$", t)
@@ -76,7 +101,7 @@ def find_region(store, region: str) -> list[dict]:
     """시군구 표기 여러 가지 → 도시·군계획 조례 후보 (동명이면 여러 개).
 
     "영천", "영천시", "경북 영천시", "수원시 장안구"(일반구), "세종시" 를 받는다.
-    시도가 주어지면 다른 시도의 조례로는 절대 넘어가지 않는다.
+    시도가 주어지면 다른 시도의 조례로는 절대 넘어가지 않는다(데이터에 없는 시도명은 없는 것으로 본다).
     """
     q = re.sub(r"\s+", " ", (region or "").strip())
     if not q:
@@ -88,6 +113,8 @@ def find_region(store, region: str) -> list[dict]:
         toks[0] = "세종특별자치시"
     sido = toks[0] if toks[0].endswith(SIDO_SUFFIX) and len(toks[0]) > 2 else None
     rest = toks[1:] if sido else toks
+    if sido and rest and not store.sido_known(sido):
+        sido = None     # 데이터에 없는 시도명(통합·개편 전 이름 등) — 시군구로만 찾는다
     names = []
     if rest:
         names.append(" ".join(rest))
