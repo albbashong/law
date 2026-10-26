@@ -136,12 +136,35 @@
 | 영역 | 내용 |
 |---|---|
 | 언어 모델 | gpt-oss-120b (vLLM, OpenAI 호환 API) |
-| 에이전트 | 자체 런타임 — A2A 프로토콜 서버, 도구 호출 루프, 되묻기(INPUT_REQUIRED), 대화 기억, 답변 검증 |
+| 에이전트 | 자체 런타임 — A2A Protocol v1.0 서버(HTTP+JSON 바인딩), 도구 호출 루프, 되묻기(INPUT_REQUIRED), 대화 기억, 답변 검증 |
 | 도구 서버 | MCP (공식 Python SDK, streamable HTTP) |
 | 데이터 | SQLite + FTS5 전문 검색, 조문 단위 색인과 인용·위임 링크 테이블 |
 | 외부 API | 법제처 국가법령정보 Open API(원문·연계), 브이월드(필지·토지이용계획) |
 | 배포 | podman compose (컨테이너 3개), cron/systemd 타이머로 법령 DB 주간 갱신 |
 | 테스트 | pytest — MCP 154개, 에이전트 런타임 345개 |
+
+### 따른 표준과 출처
+
+에이전트의 외부 인터페이스는 **A2A Protocol v1.0**(Linux Foundation)을 따릅니다.
+구현 근거는 [`agent/agent-spec/`](agent/agent-spec/)에 정리되어 있습니다.
+최종 근거는 그 안에 원본 그대로 보관한 표준 정본 사본입니다.
+
+| 문서 | 내용 | 출처 |
+|---|---|---|
+| [`agent/agent-spec/reference/a2a.proto`](agent/agent-spec/reference/a2a.proto) | **A2A 표준 정본** — 타입·enum 규범 | A2A 규격 리포 `specification/a2a.proto` |
+| [`agent/agent-spec/reference/specification.md`](agent/agent-spec/reference/specification.md) | A2A 규격 설명 — 경로·헤더·표현 규칙 | A2A 규격 리포 `docs/specification.md` |
+| [`agent/agent-spec/SPEC.md`](agent/agent-spec/SPEC.md) 2·3장 | 위 표준을 정리한 적합성 요건(엔드포인트·상태·직렬화) | A2A v1.0 |
+| [`agent/agent-spec/SPEC.md`](agent/agent-spec/SPEC.md) 6·8장 | 도구 설계, 설명문, 응답·오류 형식, 평가 | Anthropic 도구 작성 지침 |
+| [`agent/agent-spec/SPEC.md`](agent/agent-spec/SPEC.md) 4장 | 플랫폼 프로파일(아티팩트 이름·확장·실패 형식). 표준이 아닌 자체 규약입니다 | 자체 정의 |
+
+- A2A 규격 리포: https://github.com/a2aproject/A2A
+  - 사본 기준 커밋: `c0f30b35390c59d2cc398a1100823a9115b97a20` (2026-08-31)
+  - 출처와 커밋은 [`reference/README.md`](agent/agent-spec/reference/README.md)에 기록되어 있습니다.
+- Anthropic 도구 작성 지침
+  - https://www.anthropic.com/engineering/writing-tools-for-agents
+  - https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+- 적합성 자가 점검: [`agent/agent-spec/conformance_check.py`](agent/agent-spec/conformance_check.py)
+- 도구 서버는 [Model Context Protocol](https://modelcontextprotocol.io)을 따르고, 공식 Python SDK를 사용합니다.
 
 ### 데이터 규모
 
