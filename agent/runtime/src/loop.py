@@ -642,6 +642,36 @@ def with_focus(query: str, context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+async def restated(model: Any, text: str, usage_total: dict[str, int]) -> str:
+    """RESTATE_PROMPT 로 발화를 정리한 줄들(중립 질문 + 짐작) — 도구 없이 한 번 부른다.
+
+    같은 뜻을 다른 말투로 물어도 검색어·범위 판단·결론이 흔들리지 않게 하려는 것이다(일상어·약칭으로
+    엉뚱한 법령을 찾고, "안 되죠?" 같은 짐작에 결론이 끌려가던 문제 — 실측 2026-10-27). 발화 원문은 고치지
+    않는다. 읽을 수 없거나, 정리한 질문에 발화에 없는 숫자가 들어가면(지어낸 값) 아무것도 붙이지 않는다.
+    """
+    if not settings.restate_prompt:
+        return ""
+    prompt = (AGENT_DIR / settings.restate_prompt).read_text(encoding="utf-8")
+    step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content": text}], [])
+    for k in ("tokens_in", "tokens_out"):
+        usage_total[k] += (step.get("usage") or {}).get(k) or 0
+    reply = (step.get("answer") or "").strip()
+    start, end = reply.find("{"), reply.rfind("}")
+    try:
+        data = json.loads(reply[start:end + 1]) if 0 <= start < end else {}
+    except ValueError:
+        return ""
+    question = str((data or {}).get(settings.restate_question_key) or "").strip() if isinstance(data, dict) else ""
+    presumption = str(data.get(settings.restate_presumption_key) or "").strip() if question else ""
+    if not question or any(n not in text for n in re.findall(r"\d+(?:\.\d+)?", question + presumption)):
+        return ""
+    lines = [settings.restate_question_line.format(question=question)]
+    if presumption:
+        lines.append(settings.restate_presumption_line.format(presumption=presumption))
+    logger.info("restate: %s | %s", question, presumption)
+    return "\n".join(lines)
+
+
 async def run_query(
     query: str,
     *,
@@ -696,14 +726,18 @@ async def run_query(
         carried = [m for m in (prior.get("messages") or []) if m.get("role") != "system"]
         # 이전 작업은 재개(carried)가 아닐 때만 — 재개는 이미 그 대화를 잇고 있다
         work = "" if carried else previous_work(context)
+        usage_total = {"tokens_in": 0, "tokens_out": 0}
+        asked = with_focus(query, context)
+        # 질문 정리는 새 질문에만 — 재개는 되묻기에 답하는 것이라 앞 대화가 뜻을 정한다
+        neutral = "" if carried else await restated(model, asked, usage_total)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *carried,
             *([{"role": "user", "content": work}] if work else []),
-            {"role": "user", "content": (f"{settings.current_heading} " if work else "") + with_focus(query, context)},
+            {"role": "user", "content": (f"{settings.current_heading} " if work else "") + asked
+             + (f"\n{neutral}" if neutral else "")},
         ]
         tool_results: dict[str, Any] = dict(prior.get("tool_results") or {})
-        usage_total = {"tokens_in": 0, "tokens_out": 0}
         failures: list[dict[str, Any]] = []
         attempts: dict[tuple[str, str], int] = {}
         marks: dict[str, set[str]] = {}            # 도구별로 지금까지 결과에 나온 근거 표지

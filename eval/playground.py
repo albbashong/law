@@ -72,7 +72,8 @@ def ask(text, task_id=None, context_id=None, memory=None):
                 continue
             rows.append({"tool": d.get("tool"), "args": d.get("args"), "status": d.get("status"),
                          "근거상태": d.get("근거상태"), "message": d.get("message"),
-                         "refs": [f"{l} {a}" for l, a in (d.get("refs") or [])][:20]})
+                         "refs": [f"{l} {a}" for l, a in (d.get("refs") or [])][:20],
+                         "ref_pairs": [[l, a] for l, a in (d.get("refs") or [])][:40]})
     return {"state": task["status"]["state"].replace("TASK_STATE_", ""), "answer": _answer(task),
             "taskId": task["id"], "contextId": task.get("contextId"), "tools": rows, "memory": _memory(task),
             "seconds": round(time.time() - t0, 1)}
@@ -109,62 +110,186 @@ class Handler(BaseHTTPRequestHandler):
 
 PAGE = r"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>법령 근거 시험대</title>
+<title>법령 근거 찾기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <style>
-:root{--bg:#f7f7f5;--card:#fff;--ink:#1d1d1f;--sub:#6b6b70;--line:#e3e3e0;--accent:#2457c5;--ok:#1f7a3a;--warn:#a15c00;--bad:#b42318;--code:#f1f1ee}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151517;--card:#1f1f22;--ink:#ececee;--sub:#a0a0a8;--line:#333338;--accent:#7aa2ff;--ok:#5fcf80;--warn:#f0b35a;--bad:#ff7a6e;--code:#2a2a2e}}
-:root[data-theme="dark"]{--bg:#151517;--card:#1f1f22;--ink:#ececee;--sub:#a0a0a8;--line:#333338;--accent:#7aa2ff;--ok:#5fcf80;--warn:#f0b35a;--bad:#ff7a6e;--code:#2a2a2e}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
-main{max-width:960px;margin:0 auto;padding:24px 16px 80px}h1{font-size:20px;margin:0 0 4px}.sub{color:var(--sub);font-size:13px;margin-bottom:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
-textarea{width:100%;min-height:70px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);color:var(--ink);font:inherit}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
-button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:7px 12px;font:inherit;font-size:13px;cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-size:14px;padding:8px 18px}button:disabled{opacity:.5;cursor:wait}
-.ex{font-size:12.5px}.badge{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid currentColor}
-.COMPLETED{color:var(--ok)}.INPUT_REQUIRED{color:var(--warn)}.FAILED,.REJECTED,.ERROR{color:var(--bad)}
-.q{font-weight:600;margin-bottom:8px}.meta{color:var(--sub);font-size:12.5px;margin-left:6px}
-.answer table{border-collapse:collapse;width:100%;font-size:13.5px;display:block;overflow-x:auto}.answer th,.answer td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
-.answer code,pre{background:var(--code);border-radius:4px}pre{padding:8px;overflow-x:auto;font-size:12px;white-space:pre-wrap;word-break:break-all}
-details{margin-top:10px;font-size:13px}summary{cursor:pointer;color:var(--sub)}.tool{border-top:1px dashed var(--line);padding:6px 0}
-.tool b{font-family:ui-monospace,monospace}.hint{color:var(--warn);font-size:13px;margin-top:8px}
-</style></head><body><main>
-<h1>법령 근거 시험대</h1>
-<div class="sub">law_review 에이전트(A2A) → law-mcp. 답변과 함께 에이전트가 부른 도구·근거상태·참조 조문을 보여 줍니다.
-이 페이지가 오케스트레이터 역할을 해서, 같은 대화 안에서는 에이전트가 낸 작업 기억을 다음 질문에 돌려줍니다. 끊으려면 "새 대화".</div>
-<div class="card">
-<textarea id="q" placeholder="예: 경상북도 영천시 금호읍 신월리 1-51에 공장 지을 수 있어?"></textarea>
-<div class="row"><button class="primary" id="send">보내기</button><button id="reset">새 대화</button><span id="cont" class="meta"></span></div>
-<div class="row" id="examples"></div>
+:root{--paper:#f4f5f7;--leaf:#fff;--ink:#1c2333;--muted:#5b6475;--rule:#dde1e7;--seal:#b8322a;--seal-soft:#f8e9e7;--caution:#8a5a00;--caution-soft:#fff4dc;--ok:#256b45;--focus:#2f5bd3;
+ --ui:"IBM Plex Sans KR",system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;--text:"Noto Serif KR","AppleMyungjo",serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#14171d;--leaf:#1b1f27;--ink:#e6e8ee;--muted:#9aa2b2;--rule:#2d333e;--seal:#e0685e;--seal-soft:#3a2321;--caution:#e8b45a;--caution-soft:#3a2f17;--ok:#6fcf97;--focus:#7aa2ff}}
+:root[data-theme="dark"]{--paper:#14171d;--leaf:#1b1f27;--ink:#e6e8ee;--muted:#9aa2b2;--rule:#2d333e;--seal:#e0685e;--seal-soft:#3a2321;--caution:#e8b45a;--caution-soft:#3a2f17;--ok:#6fcf97;--focus:#7aa2ff}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 var(--ui);display:flex;flex-direction:column;word-break:keep-all;overflow-wrap:anywhere}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button{font:inherit;color:inherit;cursor:pointer}
+header{display:flex;align-items:baseline;gap:16px;padding:14px 24px;border-bottom:1px solid var(--rule);background:var(--leaf)}
+header h1{font:600 17px/1.3 var(--ui);margin:0;letter-spacing:-.01em}
+header p{margin:0;color:var(--muted);font-size:13px;flex:1}
+.ghost{border:1px solid var(--rule);background:transparent;border-radius:6px;padding:5px 12px;font-size:13px}
+.ghost:hover{border-color:var(--muted)}
+.shell{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
+#thread{overflow-y:auto;padding:28px 24px 24px}
+.col{max-width:760px;margin:0 auto}
+
+/* 빈 화면 */
+.welcome h2{font:600 26px/1.35 var(--text);margin:8px 0 10px;letter-spacing:-.02em}
+.welcome>p{color:var(--muted);margin:0 0 28px;max-width:38em}
+.group{margin-bottom:22px}
+.group h3{font:600 13px/1.4 var(--ui);color:var(--muted);margin:0 0 8px}
+.group button{display:block;width:100%;text-align:left;background:var(--leaf);border:1px solid var(--rule);border-radius:8px;padding:10px 14px;margin-bottom:6px;font-size:14.5px}
+.group button:hover{border-color:var(--seal)}
+
+/* 대화 */
+.turn{margin-bottom:36px}
+.q{font:600 17px/1.5 var(--ui);margin:0 0 10px;padding-left:12px;border-left:3px solid var(--ink)}
+.meta{color:var(--muted);font-size:12.5px;margin:0 0 12px;padding-left:15px}
+.meta .state{font-weight:600}
+.meta .COMPLETED{color:var(--ok)}.meta .INPUT_REQUIRED{color:var(--caution)}.meta .FAILED,.meta .REJECTED,.meta .ERROR{color:var(--seal)}
+.answer{background:var(--leaf);border:1px solid var(--rule);border-radius:10px;padding:18px 22px;font:15.5px/1.85 var(--text)}
+.answer h1,.answer h2,.answer h3,.answer h4{font:600 16px/1.5 var(--ui);margin:18px 0 6px}
+.answer p{margin:0 0 10px}.answer ul,.answer ol{padding-left:22px;margin:0 0 10px}
+.answer strong{font-weight:600}
+.answer table{border-collapse:collapse;width:100%;font:13.5px/1.6 var(--ui);margin:10px 0 14px;display:block;overflow-x:auto}
+.answer th,.answer td{border-bottom:1px solid var(--rule);padding:7px 10px;text-align:left;vertical-align:top}
+.answer th{font-weight:600;color:var(--muted);border-bottom:1.5px solid var(--ink)}
+.answer code{background:var(--paper);border-radius:4px;padding:0 4px;font-size:.9em}
+.answer hr{border:0;border-top:1px solid var(--rule);margin:16px 0}
+.answer .unverified{font:13.5px/1.6 var(--ui);background:var(--caution-soft);color:var(--caution);border-radius:6px;padding:9px 12px;margin-top:14px}
+.asking{font:14px/1.6 var(--ui);color:var(--caution);margin:10px 0 0 15px}
+.waiting{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:14px;padding:16px 15px}
+.waiting i{width:9px;height:9px;border-radius:50%;background:var(--seal);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.waiting i{animation:none}}
+details.trail{margin:12px 0 0 15px;font-size:13px}
+details.trail summary{cursor:pointer;color:var(--muted)}
+.step{display:grid;grid-template-columns:20px 1fr;gap:4px 8px;padding:8px 0;border-bottom:1px dashed var(--rule)}
+.step .n{color:var(--muted);font-variant-numeric:tabular-nums}
+.step b{font-weight:600}.step .args{color:var(--muted)}
+.step .msg{grid-column:2;color:var(--muted);font-size:12.5px}
+.step.failed b{color:var(--seal)}
+.error{color:var(--seal);font-size:14px;padding-left:15px}
+
+/* 근거 색인 */
+#index{border-left:1px solid var(--rule);background:var(--leaf);overflow-y:auto;padding:22px 0 22px 18px}
+#index h2{font:600 14px/1.4 var(--ui);margin:0 18px 4px 0}
+#index>p{color:var(--muted);font-size:12.5px;margin:0 18px 16px 0}
+.law{margin-bottom:14px}
+.law h3{font:600 13.5px/1.45 var(--text);margin:0 18px 5px 0}
+.tab{display:block;width:100%;text-align:left;background:var(--paper);border:0;border-right:4px solid var(--seal);border-radius:4px 0 0 4px;padding:4px 10px;margin-bottom:3px;font:13px/1.5 var(--ui)}
+.tab:hover{background:var(--seal-soft)}
+
+/* 입력 */
+.composer{border-top:1px solid var(--rule);background:var(--leaf);padding:12px 24px 16px}
+.composer .col{display:flex;gap:10px;align-items:flex-end}
+textarea{flex:1;min-height:48px;max-height:180px;resize:none;border:1px solid var(--rule);border-radius:10px;padding:12px 14px;background:var(--paper);color:var(--ink);font:15px/1.5 var(--ui)}
+textarea:focus{outline:none;border-color:var(--focus)}
+.send{background:var(--ink);color:var(--leaf);border:0;border-radius:10px;padding:12px 20px;font-weight:600}
+.send:disabled{opacity:.45;cursor:wait}
+.hint{max-width:760px;margin:6px auto 0;color:var(--muted);font-size:12px}
+
+@media (max-width:900px){
+ .shell{grid-template-columns:1fr;grid-template-rows:auto auto}
+ body{display:block}.shell{display:block}
+ #thread{overflow:visible;padding:20px 16px}
+ #index{border-left:0;border-top:1px solid var(--rule);padding:18px 0 18px 16px}
+ header{padding:12px 16px;flex-wrap:wrap}header p{flex-basis:100%;order:3}
+ .composer{position:sticky;bottom:0;padding:10px 16px 12px}
+ .answer{padding:14px 16px}
+}
+</style></head><body>
+<header>
+ <h1>법령 근거 찾기</h1>
+ <p>질문하면 법령·조례 원문에서 근거 조문을 찾아 답합니다. 허가 여부를 판정하지는 않습니다.</p>
+ <button class="ghost" id="reset" type="button">새 대화</button>
+</header>
+<div class="shell">
+ <main id="thread"><div class="col" id="log"></div></main>
+ <aside id="index" aria-label="근거 색인">
+  <h2>근거 색인</h2>
+  <p id="indexNote">답에 쓰인 조문이 법령별로 모입니다. 누르면 그 조문을 다시 물어볼 수 있습니다.</p>
+  <div id="laws"></div>
+ </aside>
 </div>
-<div id="log"></div>
-</main>
+<div class="composer">
+ <div class="col"><label for="q" class="sr" hidden>질문</label>
+  <textarea id="q" rows="1" placeholder="예: 영천시 자연녹지지역에 단독주택 지을 때 건폐율은?"></textarea>
+  <button class="send" id="send" type="button">물어보기</button></div>
+ <div class="hint" id="hint">Enter로 보내고 Shift+Enter로 줄을 바꿉니다.</div>
+</div>
 <script>
-const EX=["경상북도 영천시 금호읍 신월리 1-51에 공장 지을 수 있어?","영천시 자연녹지지역에 일반음식점 낼 수 있어?","천안시 자연녹지지역에 공장 지을 수 있어?",
-"부산 해운대구 제1종일반주거지역에 카페 열 수 있어?","청주시 자연녹지지역 임야에 주유소 지으려면 근거 법령이랑 필요한 허가가 뭐야?",
-"국토계획법 시행령 제84조 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있어?","건축법 제11조 건축허가에서 대통령령으로 정한 내용이 뭐야? 하위 법령 조문까지 찾아줘",
-"영천시에서 가축 사육 제한 거리는 어느 조례에 있어?","중구 자연녹지지역에 창고 지어도 돼?"];
-const $=s=>document.querySelector(s);let pending=null,conv={contextId:null,memory:null};
-const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const md=s=>window.marked?marked.parse(s||""):"<pre>"+esc(s)+"</pre>";
-EX.forEach(t=>{const b=document.createElement("button");b.className="ex";b.textContent=t.length>34?t.slice(0,34)+"…":t;b.title=t;b.onclick=()=>{$("#q").value=t;$("#q").focus()};$("#examples").appendChild(b)});
-function setCont(){const n=conv.memory?.turns?.length||0;$("#cont").textContent=pending?"되묻기에 답하는 중 — 같은 태스크로 이어 보냅니다":(n?`같은 대화 · 작업 기억 ${n}턴을 함께 보냅니다`:"")}
-$("#reset").onclick=()=>{pending=null;conv={contextId:null,memory:null};setCont();$("#log").innerHTML=""};
-async function send(){const text=$("#q").value.trim();if(!text)return;$("#send").disabled=true;
- const card=document.createElement("div");card.className="card";card.innerHTML=`<div class="q">${esc(text)}</div><div class="meta">에이전트가 답을 찾는 중…</div>`;$("#log").prepend(card);
- try{const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,contextId:conv.contextId,memory:conv.memory,...(pending||{})})});
+const GROUPS=[
+ ["땅과 건축",["경상북도 영천시 금호읍 신월리 1-51에 공장 지을 수 있어?","영천시 자연녹지지역에 일반음식점 낼 수 있어?","부산 해운대구 제1종일반주거지역에 카페 열 수 있어?","청주시 자연녹지지역 임야에 주유소 지으려면 근거 법령이랑 필요한 허가가 뭐야?"]],
+ ["조문과 위임 관계",["건축법 제11조 건축허가에서 대통령령으로 정한 내용이 뭐야? 하위 법령 조문까지 찾아줘","국토계획법 시행령 제84조 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있어?","영천시 도시계획 조례 제25조의 상위 법령 근거가 뭐야?"]],
+ ["생활 속 법령",["혈중알코올농도 0.03%로 운전하면 어떤 처벌을 받아?","공직자에게 제공할 수 있는 음식물 가액 한도는 얼마야?"]]];
+const TOOL={building_basis:"용도별 건축 근거",zone_ratios:"건폐율·용적률",parcel_zoning:"필지 조회",law_article:"조문 열람",law_search:"법령 검색",law_definition:"정의 찾기"};
+const ARG={use:"용도",region:"지역",zone:"용도지역",address:"주소",land_category:"지목",law:"법령",article:"조문",query:"검색어",term:"용어",scope:"범위",chain:"방향",depth:"깊이",limit:"개수"};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// 한글에 바로 붙은 **굵게** 는 CommonMark 규칙상 풀리지 않아 미리 바꾼다
+const bold=s=>(s||"").replace(/\*\*([^*\n]+?)\*\*/g,"<strong>$1</strong>");
+const md=s=>window.marked?marked.parse(bold(s)):"<p>"+esc(s).replace(/\n/g,"<br>")+"</p>";
+let pending=null,conv={contextId:null,memory:null},busy=false;const index=new Map();
+
+function welcome(){
+ $("#log").innerHTML=`<section class="welcome"><h2>어느 법 몇 조에 그렇게 적혀 있는지 찾아 드립니다</h2>
+ <p>주소, 지역과 용도지역, 법령 이름 중 아는 것으로 물어보세요. 답에는 근거 조문과 확인해야 할 조건이 함께 나옵니다.</p>
+ ${GROUPS.map(([g,qs])=>`<div class="group"><h3>${esc(g)}</h3>${qs.map(q=>`<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`).join("")}</section>`;
+ $("#log").querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>{$("#q").value=b.dataset.q;grow();send()});
+}
+function renderIndex(){
+ const box=$("#laws");box.innerHTML="";
+ for(const [law,arts] of index){const d=document.createElement("div");d.className="law";
+  d.innerHTML=`<h3>${esc(law)}</h3>`+[...arts].map(a=>`<button type="button" class="tab" data-law="${esc(law)}" data-art="${esc(a)}">${esc(a)}</button>`).join("");box.appendChild(d)}
+ box.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{$("#q").value=`${t.dataset.law} ${t.dataset.art} 원문과 상위·하위 조문 보여줘`;grow();$("#q").focus()});
+ $("#indexNote").hidden=index.size>0;
+}
+function addRefs(tools,answer){
+ const flat=(answer||"").replace(/\s+/g,"");
+ for(const t of tools)for(const [law,art] of (t.ref_pairs||[])){
+  if(!law||!art||!flat.includes(law.replace(/\s+/g,""))||!flat.includes(art.replace(/\s+/g,"")))continue;   // 답에 나온 법령의, 답에 나온 조문만
+  if(!index.has(law))index.set(law,new Set());index.get(law).add(art)}
+ renderIndex();
+}
+function trail(tools){
+ if(!tools.length)return "";
+ return `<details class="trail"><summary>찾아본 과정 ${tools.length}단계</summary>${tools.map((t,i)=>{
+  const args=Object.entries(t.args||{}).filter(([,v])=>v!==null&&v!==""&&v!==undefined).map(([k,v])=>`${ARG[k]||k} ${esc(v)}`).join(", ");
+  return `<div class="step ${t.status==="ok"?"":"failed"}"><span class="n">${i+1}</span><span><b>${esc(TOOL[t.tool]||t.tool)}</b> <span class="args">${args}</span></span>${t.message?`<span class="msg">${esc(t.message)}</span>`:""}</div>`}).join("")}</details>`;
+}
+function grow(){const q=$("#q");q.style.height="auto";q.style.height=Math.min(q.scrollHeight,180)+"px"}
+function setHint(){
+ const n=conv.memory?.turns?.length||0;
+ $("#hint").textContent=pending?"에이전트가 되물었습니다. 여기에 답하면 같은 질문을 이어서 찾습니다.":n?`같은 대화로 이어 묻습니다 (앞 질문 ${n}개 기억). 처음부터 하려면 새 대화를 누르세요.`:"Enter로 보내고 Shift+Enter로 줄을 바꿉니다.";
+ $("#q").placeholder=pending?"되물은 내용에 답해 주세요":"예: 영천시 자연녹지지역에 단독주택 지을 때 건폐율은?";
+}
+async function send(){
+ const text=$("#q").value.trim();if(!text||busy)return;busy=true;$("#send").disabled=true;
+ if($(".welcome"))$("#log").innerHTML="";
+ const turn=document.createElement("section");turn.className="turn";
+ turn.innerHTML=`<p class="q">${esc(text)}</p><div class="waiting" role="status"><i></i><span>원문에서 근거를 찾는 중 (0초)</span></div>`;
+ $("#log").appendChild(turn);turn.scrollIntoView({block:"start",behavior:"smooth"});
+ $("#q").value="";grow();
+ const t0=Date.now(),timer=setInterval(()=>{const s=turn.querySelector(".waiting span");if(s)s.textContent=`원문에서 근거를 찾는 중 (${Math.round((Date.now()-t0)/1000)}초)`},1000);
+ try{
+  const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,contextId:conv.contextId,memory:conv.memory,...(pending||{})})});
   const d=await r.json();if(d.error)throw new Error(d.error);
   pending=d.state==="INPUT_REQUIRED"?{taskId:d.taskId,contextId:d.contextId}:null;
-  conv.contextId=d.contextId||conv.contextId;if(d.memory)conv.memory=d.memory;setCont();
-  const tools=d.tools.map(t=>`<div class="tool"><b>${esc(t.tool)}</b> <span class="meta">${esc(t.status)}${t["근거상태"]?" · "+esc(t["근거상태"]):""}</span><pre>${esc(JSON.stringify(t.args,null,0))}</pre>${t.message?`<div class="meta">${esc(t.message)}</div>`:""}${t.refs.length?`<div class="meta">refs: ${esc(t.refs.join(" · "))}</div>`:""}</div>`).join("");
-  card.innerHTML=`<div class="q">${esc(text)}</div><div><span class="badge ${d.state}">${d.state}</span><span class="meta">${d.seconds}초 · 도구 ${d.tools.length}회</span></div>
-   <div class="answer">${md(d.answer)}</div>${d.state==="INPUT_REQUIRED"?`<div class="hint">에이전트가 되묻고 있습니다. 위 입력창에 답하면 이어서 진행합니다.</div>`:""}
-   <details><summary>도구 호출 ${d.tools.length}회</summary>${tools||'<div class="meta">없음</div>'}</details>`;
-  $("#q").value="";
- }catch(e){card.innerHTML=`<div class="q">${esc(text)}</div><span class="badge ERROR">오류</span><pre>${esc(e.message)}</pre>`}
- finally{$("#send").disabled=false}}
-$("#send").onclick=send;$("#q").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey))send()});
+  conv.contextId=d.contextId||conv.contextId;if(d.memory)conv.memory=d.memory;
+  const label={COMPLETED:"답변 완료",INPUT_REQUIRED:"되물음",FAILED:"실패",REJECTED:"범위 밖",CANCELED:"취소"}[d.state]||d.state;
+  turn.innerHTML=`<p class="q">${esc(text)}</p><p class="meta"><span class="state ${d.state}">${label}</span>, ${d.seconds}초 걸림, 도구 ${d.tools.length}회</p>
+   <div class="answer">${md(d.answer)}</div>${pending?`<p class="asking">아래 입력창에 답하면 이어서 찾습니다.</p>`:""}${trail(d.tools)}`;
+  turn.querySelectorAll(".answer p").forEach(p=>{if(p.textContent.trim().startsWith("※ 다음 인용은"))p.className="unverified"});
+  addRefs(d.tools,d.answer);
+ }catch(e){turn.innerHTML=`<p class="q">${esc(text)}</p><p class="error">답을 받지 못했습니다: ${esc(e.message)}. 에이전트(:7016)가 켜져 있는지 확인한 뒤 다시 보내 주세요.</p>`;$("#q").value=text;grow()}
+ finally{clearInterval(timer);busy=false;$("#send").disabled=false;setHint();$("#q").focus()}
+}
+$("#send").onclick=send;
+$("#q").addEventListener("input",grow);
+$("#q").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
+$("#reset").onclick=()=>{pending=null;conv={contextId:null,memory:null};index.clear();renderIndex();welcome();setHint();$("#q").focus()};
+welcome();setHint();
 </script></body></html>"""
 
 

@@ -164,6 +164,17 @@ class Settings(BaseSettings):
         default="조회할 수 있는 횟수의 끝입니다. 더 조회하지 말고 지금까지 조회한 결과만으로 답하세요. 확인하지 못한 "
         "부분은 무엇을 찾아봤고 무엇을 확인하지 못했는지 밝히고, 조회 결과에 없는 조문은 인용하지 않습니다.",
         description="마지막 라운드(ROUNDS_MAX)에 도구 없이 답하게 하는 지시 — 라운드 상한 실패 대신 찾은 만큼 답한다.")
+    restate_prompt: str = Field(
+        default="", description="질문 정리 지시 파일(AGENT_DIR 기준). 도구 루프 전에 한 번, 발화를 법률 용어의 중립 질문과 "
+        "사용자의 짐작으로 나눠 JSON {RESTATE_QUESTION_KEY, RESTATE_PRESUMPTION_KEY} 로 답하게 한다. 비우면 정리하지 않는다.")
+    restate_question_key: str = Field(default="질문", description="질문 정리 JSON 에서 중립 질문의 키.")
+    restate_presumption_key: str = Field(default="짐작", description="질문 정리 JSON 에서 사용자의 짐작(전제·기대)의 키.")
+    restate_question_line: str = Field(
+        default="[법률 용어로 정리한 질문] {question} — 법령 검색어와 이 에이전트가 답할 질문인지의 판단은 이 질문으로 하세요.",
+        description="발화 아래 붙이는 정리된 질문 줄. 검색어와 범위 판단은 이 줄로 한다.")
+    restate_presumption_line: str = Field(
+        default="[사용자의 짐작] {presumption} — 조회한 원문으로 판단하고, 답 끝에 이 짐작이 맞는지 원문 근거로 밝히세요.",
+        description="발화 아래 붙이는 짐작 줄. 짐작이 없으면 붙이지 않는다.")
     answer_review_prompt: str = Field(
         default="", description="답 점검 지시 파일(AGENT_DIR 기준). 인용·수치 검증을 통과한 답을 조회 원문과 대조해 JSON "
         "{ANSWER_REVIEW_KEY: [고칠 점]} 으로 답하게 하고, 고칠 점이 있으면 한 번 되돌린다. 비우면 점검하지 않는다.")
