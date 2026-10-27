@@ -142,9 +142,11 @@ header p{margin:0;color:var(--muted);font-size:13px;flex:1}
 .group button:hover{border-color:var(--seal)}
 
 /* 대화 */
-.turn{margin-bottom:36px}
-.q{font:600 17px/1.5 var(--ui);margin:0 0 10px;padding-left:12px;border-left:3px solid var(--ink)}
-.meta{color:var(--muted);font-size:12.5px;margin:0 0 12px;padding-left:15px}
+.turn{padding-bottom:40px}
+.sep{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12.5px;font-weight:600;margin:0 0 18px}
+.sep::before,.sep::after{content:"";flex:1;height:1px;background:var(--rule)}
+.q{width:fit-content;max-width:85%;margin:0 0 16px auto;background:var(--ink);color:var(--leaf);padding:11px 16px;border-radius:14px 14px 4px 14px;font:500 15.5px/1.55 var(--ui);white-space:pre-wrap}
+.meta{color:var(--muted);font-size:12.5px;margin:0 0 10px}
 .meta .state{font-weight:600}
 .meta .COMPLETED{color:var(--ok)}.meta .INPUT_REQUIRED{color:var(--caution)}.meta .FAILED,.meta .REJECTED,.meta .ERROR{color:var(--seal)}
 .answer{background:var(--leaf);border:1px solid var(--rule);border-radius:10px;padding:18px 22px;font:15.5px/1.85 var(--text)}
@@ -157,19 +159,19 @@ header p{margin:0;color:var(--muted);font-size:13px;flex:1}
 .answer code{background:var(--paper);border-radius:4px;padding:0 4px;font-size:.9em}
 .answer hr{border:0;border-top:1px solid var(--rule);margin:16px 0}
 .answer .unverified{font:13.5px/1.6 var(--ui);background:var(--caution-soft);color:var(--caution);border-radius:6px;padding:9px 12px;margin-top:14px}
-.asking{font:14px/1.6 var(--ui);color:var(--caution);margin:10px 0 0 15px}
-.waiting{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:14px;padding:16px 15px}
+.asking{font:14px/1.6 var(--ui);color:var(--caution);margin:10px 0 0}
+.waiting{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:14px;padding:6px 0}
 .waiting i{width:9px;height:9px;border-radius:50%;background:var(--seal);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.waiting i{animation:none}}
-details.trail{margin:12px 0 0 15px;font-size:13px}
+details.trail{margin:12px 0 0;font-size:13px}
 details.trail summary{cursor:pointer;color:var(--muted)}
 .step{display:grid;grid-template-columns:20px 1fr;gap:4px 8px;padding:8px 0;border-bottom:1px dashed var(--rule)}
 .step .n{color:var(--muted);font-variant-numeric:tabular-nums}
 .step b{font-weight:600}.step .args{color:var(--muted)}
 .step .msg{grid-column:2;color:var(--muted);font-size:12.5px}
 .step.failed b{color:var(--seal)}
-.error{color:var(--seal);font-size:14px;padding-left:15px}
+.error{color:var(--seal);font-size:14px}
 
 /* 근거 색인 */
 #index{border-left:1px solid var(--rule);background:var(--leaf);overflow-y:auto;padding:22px 0 22px 18px}
@@ -268,7 +270,9 @@ async function send(){
  const text=$("#q").value.trim();if(!text||busy)return;busy=true;$("#send").disabled=true;
  if($(".welcome"))$("#log").innerHTML="";
  const turn=document.createElement("section");turn.className="turn";
- turn.innerHTML=`<p class="q">${esc(text)}</p><div class="waiting" role="status"><i></i><span>원문에서 근거를 찾는 중 (0초)</span></div>`;
+ // 몇 번째 질문인지 구분선에 적는다 — 되물음에 답한 것도 한 턴이다
+ const head=`<div class="sep">${$("#log").querySelectorAll(".turn").length+1}번째 질문</div><p class="q">${esc(text)}</p>`;
+ turn.innerHTML=`${head}<div class="waiting" role="status"><i></i><span>원문에서 근거를 찾는 중 (0초)</span></div>`;
  $("#log").appendChild(turn);turn.scrollIntoView({block:"start",behavior:"smooth"});
  $("#q").value="";grow();
  const t0=Date.now(),timer=setInterval(()=>{const s=turn.querySelector(".waiting span");if(s)s.textContent=`원문에서 근거를 찾는 중 (${Math.round((Date.now()-t0)/1000)}초)`},1000);
@@ -278,11 +282,11 @@ async function send(){
   pending=d.state==="INPUT_REQUIRED"?{taskId:d.taskId,contextId:d.contextId}:null;
   conv.contextId=d.contextId||conv.contextId;if(d.memory)conv.memory=d.memory;
   const label={COMPLETED:"답변 완료",INPUT_REQUIRED:"되물음",FAILED:"실패",REJECTED:"범위 밖",CANCELED:"취소"}[d.state]||d.state;
-  turn.innerHTML=`<p class="q">${esc(text)}</p><p class="meta"><span class="state ${d.state}">${label}</span>, ${d.seconds}초 걸림, 도구 ${d.tools.length}회</p>
+  turn.innerHTML=`${head}<p class="meta"><span class="state ${d.state}">${label}</span>, ${d.seconds}초 걸림, 도구 ${d.tools.length}회</p>
    <div class="answer">${md(d.answer)}</div>${pending?`<p class="asking">아래 입력창에 답하면 이어서 찾습니다.</p>`:""}${trail(d.tools)}`;
   turn.querySelectorAll(".answer p").forEach(p=>{if(p.textContent.trim().startsWith("※ 다음 인용은"))p.className="unverified"});
   addRefs(d.tools,d.answer);
- }catch(e){turn.innerHTML=`<p class="q">${esc(text)}</p><p class="error">답을 받지 못했습니다: ${esc(e.message)}. 에이전트(:7016)가 켜져 있는지 확인한 뒤 다시 보내 주세요.</p>`;$("#q").value=text;grow()}
+ }catch(e){turn.innerHTML=`${head}<p class="error">답을 받지 못했습니다: ${esc(e.message)}. 에이전트(:7016)가 켜져 있는지 확인한 뒤 다시 보내 주세요.</p>`;$("#q").value=text;grow()}
  finally{clearInterval(timer);busy=false;$("#send").disabled=false;setHint();$("#q").focus()}
 }
 $("#send").onclick=send;
