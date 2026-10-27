@@ -1,6 +1,6 @@
 """A2A Protocol v1.0 데이터 모델.
 
-정본은 `agent-spec/reference/a2a.proto`(커밋 c0f30b3, 2026-08-31). 이 파일은 그
+정본은 `agent-spec/reference/a2a.proto`(커밋 98279d6, 2026-10-20). 이 파일은 그
 proto 를 pydantic 으로 옮긴 것이고, `tests/a2a/test_conformance.py` 가 규격 문서의
 JSON 예시를 픽스처로 박아 옮김이 어긋나지 않았는지 지킨다.
 

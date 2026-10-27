@@ -158,7 +158,7 @@
 | [`agent/agent-spec/SPEC.md`](agent/agent-spec/SPEC.md) 4장 | 플랫폼 프로파일(아티팩트 이름·확장·실패 형식). 표준이 아닌 자체 규약입니다 | 자체 정의 |
 
 - A2A 규격 리포: https://github.com/a2aproject/A2A
-  - 사본 기준 커밋: `c0f30b35390c59d2cc398a1100823a9115b97a20` (2026-08-31)
+  - 사본 기준 커밋: `98279d62316361ba8451eaef300f72b72e169185` (2026-10-20)
   - 출처와 커밋은 [`reference/README.md`](agent/agent-spec/reference/README.md)에 기록되어 있습니다.
 - Anthropic 도구 작성 지침
   - https://www.anthropic.com/engineering/writing-tools-for-agents
