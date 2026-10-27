@@ -1,0 +1,19 @@
+{"dlytrmRltService": {
+    "검색결과개수": "1",
+    "키워드": "",
+    "target": "dlytrmRlt",
+    "일상용어": {
+        "id": "1",
+        "일상용어명": "김영란법",
+        "연계용어": {
+            "용어간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRlt&type=XML&MST=91593",
+            "id": "1",
+            "용어관계": "연관어",
+            "법령용어명": "공직자",
+            "용어관계코드": "140305",
+            "비고": "",
+            "조문간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRltJo&type=XML&MST=91593"
+        },
+        "출처": ""
+    }
+}}

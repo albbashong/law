@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from law_mcp.engine.facts import excerpt
+from law_mcp.engine.structure import leads
 from law_mcp.store.db import nospace
 from law_mcp.tools.article import resolve_region
 from law_mcp.tools.common import READ_ONLY, result, trace
@@ -29,15 +30,16 @@ def _snippet(text: str, term: str, n: int = 160) -> str:
     return ("…" if start else "") + flat[start:start + n] + ("…" if start + n < len(flat) else "")
 
 
-def _focus_snippet(text: str, query: str, title: str) -> str:
-    """제목이 이미 보여 주는 낱말보다 제목에 없는 검색어 낱말이 나오는 곳을 발췌한다 — 조문의 어느 부분이
-    질문에 맞는지 보이도록."""
+def _focus_word(text: str, query: str, title: str) -> str:
+    """제목이 이미 보여 주는 낱말보다 제목에 없는 검색어 낱말 — 조문의 어느 부분이 질문에 맞는지 보이도록."""
     words = [nospace(t) for t in query.split() if len(nospace(t)) >= 2]
     flat, head = nospace(text or ""), nospace(title or "")
-    for w in sorted(words, key=lambda w: w in head):
-        if w in flat:
-            return _snippet(text, w)
-    return _snippet(text, nospace(query))
+    return next((w for w in sorted(words, key=lambda w: w in head) if w in flat), nospace(query))
+
+
+def _focus_snippet(text: str, query: str, title: str) -> str:
+    """검색어 낱말이 나오는 곳을 발췌한다(_focus_word)."""
+    return _snippet(text, _focus_word(text, query, title))
 
 
 def _chunks(query: str) -> list[str]:
@@ -180,15 +182,21 @@ def _hit_rows(store, hits, query):
     rows = []
     for h in hits:
         if h["kind"] == "u":
-            u = store._one("SELECT u.label, u.title, u.text, d.name AS law FROM unit u JOIN doc d ON d.doc_id=u.doc_id"
-                           " WHERE u.unit_id=?", (h["ref"],))
+            u = store._one("SELECT u.doc_id, u.path, u.label, u.title, u.text, d.name AS law FROM unit u"
+                           " JOIN doc d ON d.doc_id=u.doc_id WHERE u.unit_id=?", (h["ref"],))
             art, title, text = u["label"], u["title"] or "", u["text"]
+            # 발췌한 곳이 호·목이면 그것이 딸린 항의 문장(적용 대상·요건)을 함께 — 호 한 줄만으로 적용하지 않게
+            lead = leads(store, u["doc_id"], u["path"], focus=_focus_word(text, query, title))
         else:
             u = store._one("SELECT a.no, a.title, a.text, d.name AS law FROM annex a JOIN doc d ON d.doc_id=a.doc_id"
                            " WHERE a.annex_id=?", (h["ref"],))
             art, title, text = f"별표 {u['no']}", u["title"] or "", u["text"]
-        rows.append({"law": u["law"], "article": art, "title": title, "snippet": _focus_snippet(text, query, title),
-                     "호출인자": {"law": u["law"], "article": art}})
+            lead = []
+        row = {"law": u["law"], "article": art, "title": title, "snippet": _focus_snippet(text, query, title),
+               "호출인자": {"law": u["law"], "article": art}}
+        if lead:
+            row["딸린_문장"] = lead
+        rows.append(row)
     return rows
 
 
@@ -319,9 +327,13 @@ def _search(store, expr, query, doc_ids, source, limit, weights=None):
     else:
         units = store.search_units(expr, doc_ids, source, POOL)
     for u in _ranked(store, units, query, weights)[:limit]:
-        rows.append({"law": u["law"], "article": u["label"], "title": u["title"] or "",
-                     "snippet": _focus_snippet(u["text"], query, u["title"]),
-                     "호출인자": {"law": u["law"], "article": u["label"]}})
+        row = {"law": u["law"], "article": u["label"], "title": u["title"] or "",
+               "snippet": _focus_snippet(u["text"], query, u["title"]),
+               "호출인자": {"law": u["law"], "article": u["label"]}}
+        lead = leads(store, u["doc_id"], u["path"], focus=_focus_word(u["text"], query, u["title"]))
+        if lead:     # 발췌한 곳이 호·목이면 딸린 항의 문장(적용 대상·요건)을 함께
+            row["딸린_문장"] = lead
+        rows.append(row)
     for a in store.search_annex(expr, doc_ids, source, limit):
         art = f"별표 {a['no']} {a['label']}"
         rows.append({"law": a["law"], "article": art, "title": a["annex_title"] or "",

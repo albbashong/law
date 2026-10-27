@@ -38,8 +38,18 @@ def trace(tool: str, args: dict, res: dict) -> dict:
         parts += [str(r.get("text") or "") for r in facts.get("정의", []) if isinstance(r, dict)]
         parts += [str(x) for x in facts.get("의제_목록", []) or []]
         texts = " | ".join(p for p in parts if p)
+
+        def body(r: dict, key: str) -> str:   # 딸린 항의 문장을 앞에 붙인 그 조문의 글
+            return "\n".join([*(r.get("딸린_문장") or []), str(r.get(key) or "")]).strip()
+        ref_texts = []   # 조문마다 도구가 보여 준 원문 — 시험 화면의 근거 색인이 펼쳐 보인다
+        if facts.get("법령") and facts.get("조문") and facts.get("원문"):
+            ref_texts.append([facts["법령"], facts["조문"], body(facts, "원문")])
+        for key, rows in (("excerpt", facts.get("refs")), ("snippet", facts.get("결과")), ("text", facts.get("정의"))):
+            for r in rows if isinstance(rows, list) else []:
+                if isinstance(r, dict) and r.get(key):
+                    ref_texts.append([r.get("law"), r.get("article"), body(r, key)])
         row = {"ts": time.time(), "tool": tool, "args": args, "status": res.get("status"),
-               "근거상태": facts.get("근거상태"), "refs": refs, "texts": texts,
+               "근거상태": facts.get("근거상태"), "refs": refs, "texts": texts, "ref_texts": ref_texts,
                "message": res.get("message")}
         with open(path, "a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

@@ -86,3 +86,18 @@ def test_trace_includes_definitions_and_deemed_list(tmp_path, monkeypatch):
     assert ["국토의 계획 및 이용에 관한 법률", "제2조제15호"] in rows[0]["refs"]
     assert "용도지역" in rows[0]["texts"]
     assert "제56조" in rows[1]["texts"]
+
+
+def test_trace_keeps_text_per_ref(tmp_path, monkeypatch):
+    f = tmp_path / "t.jsonl"
+    monkeypatch.setenv("LAW_MCP_TRACE_FILE", str(f))
+    from law_mcp.tools.common import trace
+    trace("law_article", {}, {"status": "ok", "facts": {
+        "법령": "A 시행령", "조문": "별표 1", "원문": "음식물 3만원", "딸린_문장": [],
+        "refs": [{"law": "A법", "article": "제8조", "excerpt": "제8조 본문"}]}})
+    trace("law_search", {}, {"status": "ok", "facts": {"결과": [
+        {"law": "B법", "article": "제2조제1호", "snippet": "1. 호 내용", "딸린_문장": ["제2조: 다음 각 호"]}]}})
+    rows = [json.loads(x) for x in f.read_text().splitlines()]
+    assert ["A 시행령", "별표 1", "음식물 3만원"] in rows[0]["ref_texts"]
+    assert ["A법", "제8조", "제8조 본문"] in rows[0]["ref_texts"]
+    assert rows[1]["ref_texts"] == [["B법", "제2조제1호", "제2조: 다음 각 호\n1. 호 내용"]]

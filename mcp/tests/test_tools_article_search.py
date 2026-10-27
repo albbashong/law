@@ -341,3 +341,11 @@ def test_other_family_law_cited_by_a_decree_is_not_its_upper_law(store):
     notes = {(x["law"], x["note"]) for x in r["facts"]["refs"]}
     assert ("국토의 계획 및 이용에 관한 법률", "상위") not in notes, notes
     assert any(law == "건축법" and note == "상위" for law, note in notes), notes
+
+
+def test_article_lists_abbreviations_of_linked_laws_too(store):
+    """연결로 함께 나온 하위 법령의 약칭도 — 법률만 열고 답에 「국토계획법 시행령」이라 써도 지어낸 이름이 아니다."""
+    r = run_law_article(store, "국토의 계획 및 이용에 관한 법률", "제76조", chain="down")
+    linked = {x["law"] for x in r["facts"]["refs"]}
+    assert "국토의 계획 및 이용에 관한 법률 시행령" in linked
+    assert "국토계획법시행령" in r["facts"]["약칭"]

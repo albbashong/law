@@ -125,6 +125,16 @@ class Settings(BaseSettings):
         description="검증에 걸린 인용을 모델에 되돌릴 때 쓰는 문장. {cites} 자리에 인용 목록.",
     )
 
+    answer_retry_tail: str = Field(
+        default="다시 쓰는 답에는 무엇을 고쳤는지, 어디서 조회·확인했는지를 적지 말고 사용자에게 할 답만 쓰세요.",
+        description="답을 되돌리는 모든 문장 끝에 붙는 말. 비우면 붙이지 않는다.",
+    )
+    answer_internal_retry_text: str = Field(
+        default="답변에 내부 도구 이름({names})을 적었습니다. 사용자는 도구를 모릅니다 — 그 이름과 '조회 결과' 같은 "
+        "조회 과정 설명을 빼고, 법령·조문과 내용만으로 다시 답하세요.",
+        description="답 본문에 이번 실행의 도구 이름이 나왔을 때 되돌리는 문장({names}). 되돌린 뒤에도 남으면 그 문장을 뺀다.",
+    )
+
     answer_quote_pattern: str = Field(
         default="",
         description="답변에서 따옴표 인용문을 잡는 정규식(비지 않은 그룹이 인용문). 조문 번호(ANSWER_CITE_PATTERN)가 적힌 줄의 인용문이 이번 대화의 도구 결과·사용자 "
@@ -135,6 +145,13 @@ class Settings(BaseSettings):
         description="답변에서 법령명을 잡는 정규식(비지 않은 그룹이 이름). 이름이 이번 대화의 도구 결과·사용자 발화에 "
         "없으면(공백 무시) 인용처럼 되돌린다 — 지어낸 법령명을 막는다. 비우면 검증하지 않는다.",
     )
+    answer_law_loose_pattern: str = Field(
+        default="",
+        description="「」 없이 쓴 법령 정식명을 잡는 정규식(첫 그룹, 앞말이 붙어도 된다). 잡힌 말은 이번 대화의 도구 결과 "
+        "법령명(ANSWER_LAW_KEYS 값)이나 사용자 발화의 같은 꼴 이름으로 끝나야 한다 — 늘여 쓴 정식명을 지어내지 못하게. "
+        "비우면 검증하지 않는다.",
+    )
+    answer_law_keys: str = Field(default="", description="도구 결과에서 법령명으로 읽을 키(쉼표 구분, 값은 문자열이나 문자열 목록).")
     answer_strip_pattern: str = Field(
         default="", description="최종 답변에서 지울 표기의 정규식(예: 모델이 본문에 흘린 도구 호출 표기). 비우면 그대로 둔다.")
 
@@ -169,6 +186,16 @@ class Settings(BaseSettings):
         "사용자의 짐작으로 나눠 JSON {RESTATE_QUESTION_KEY, RESTATE_PRESUMPTION_KEY} 로 답하게 한다. 비우면 정리하지 않는다.")
     restate_question_key: str = Field(default="질문", description="질문 정리 JSON 에서 중립 질문의 키.")
     restate_presumption_key: str = Field(default="짐작", description="질문 정리 JSON 에서 사용자의 짐작(전제·기대)의 키.")
+    restate_terms_key: str = Field(default="확인할 말", description="질문 정리 JSON 에서 확인할 일상어·별칭 목록을 읽을 키.")
+    restate_term_tool: str = Field(
+        default="", description="확인할 말을 법령 용어·법령명에 잇는 도구 이름(예: term_link). 비우거나 도구 목록에 없으면 묻지 않는다.")
+    restate_term_arg: str = Field(default="word", description="그 도구에 말을 넘길 인자 이름.")
+    restate_terms_max: int = Field(default=3, description="한 질문에서 확인할 말 수 상한.")
+    restate_term_failed_pattern: str = Field(
+        default="", description="연계를 못 찾은 말 중 이 정규식에 맞는 것만 결과 줄을 붙인다(예: 법령 이름 꼴). 비우면 성공한 것만.")
+    restate_term_line: str = Field(
+        default="[말 연계 자료] {word}: {result} — 이 말은 기억으로 다른 용어·법령으로 바꾸지 말고 이 자료대로 다루세요.",
+        description="확인 결과 한 줄 틀({word}, {result}).")
     restate_question_line: str = Field(
         default="[법률 용어로 정리한 질문] {question} — 법령 검색어와 이 에이전트가 답할 질문인지의 판단은 이 질문으로 하세요.",
         description="발화 아래 붙이는 정리된 질문 줄. 검색어와 범위 판단은 이 줄로 한다.")

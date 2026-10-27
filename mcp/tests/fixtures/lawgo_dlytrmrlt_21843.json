@@ -1,0 +1,30 @@
+{"dlytrmRltService": {
+    "검색결과개수": "1",
+    "키워드": "",
+    "target": "dlytrmRlt",
+    "일상용어": {
+        "id": "1",
+        "일상용어명": "그린벨트",
+        "연계용어": [
+            {
+                "용어간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRlt&type=XML&MST=38457",
+                "id": "1",
+                "용어관계": "동의어",
+                "법령용어명": "개발제한구역",
+                "용어관계코드": "140301",
+                "비고": "",
+                "조문간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRltJo&type=XML&MST=38457"
+            },
+            {
+                "용어간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRlt&type=XML&MST=38581",
+                "id": "2",
+                "용어관계": "연관어",
+                "법령용어명": "녹지",
+                "용어관계코드": "140305",
+                "비고": "",
+                "조문간관계링크": "/DRF/lawService.do?OC=test&target=lstrmRltJo&type=XML&MST=38581"
+            }
+        ],
+        "출처": ""
+    }
+}}

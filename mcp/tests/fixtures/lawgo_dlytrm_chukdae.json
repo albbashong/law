@@ -1,0 +1,130 @@
+{"dlytrmSearch": {
+    "검색결과개수": "21",
+    "키워드": "축대",
+    "page": "1",
+    "target": "dlytrm",
+    "일상용어": [
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=357415",
+            "id": "1",
+            "일상용어명": "가축대소변처리",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=236191",
+            "id": "2",
+            "일상용어명": "감축대상수산물",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=356399",
+            "id": "3",
+            "일상용어명": "비축대상대지",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=391313",
+            "id": "4",
+            "일상용어명": "건축대수선용도변경",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=454199",
+            "id": "5",
+            "일상용어명": "재건축대상주택",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=138335",
+            "id": "6",
+            "일상용어명": "감축대책",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=434617",
+            "id": "7",
+            "일상용어명": "비축대행업자",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=454195",
+            "id": "8",
+            "일상용어명": "부과개시시점재건축대상주택",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=113075",
+            "id": "9",
+            "일상용어명": "석유비축대행자",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=191329",
+            "id": "10",
+            "일상용어명": "석탄유비축대행업자",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=415665",
+            "id": "11",
+            "일상용어명": "증축대수선허가",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=387119",
+            "id": "12",
+            "일상용어명": "재건축대체주택",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=218807",
+            "id": "13",
+            "일상용어명": "연계교통체계구축대책",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=352347",
+            "id": "14",
+            "일상용어명": "비축대상물품",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=80713",
+            "id": "15",
+            "일상용어명": "구축대응책",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=191331",
+            "id": "16",
+            "일상용어명": "원유비축대행업자",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=367643",
+            "id": "17",
+            "일상용어명": "재건축대상",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=207725",
+            "id": "18",
+            "일상용어명": "구축대책",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=307953",
+            "id": "19",
+            "일상용어명": "주택신축대출",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=427071",
+            "id": "20",
+            "일상용어명": "비축대행수수료",
+            "출처": ""
+        }
+    ],
+    "section": "dlyTrm",
+    "numOfRows": "20"
+}}

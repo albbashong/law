@@ -73,7 +73,8 @@ def ask(text, task_id=None, context_id=None, memory=None):
             rows.append({"tool": d.get("tool"), "args": d.get("args"), "status": d.get("status"),
                          "근거상태": d.get("근거상태"), "message": d.get("message"),
                          "refs": [f"{l} {a}" for l, a in (d.get("refs") or [])][:20],
-                         "ref_pairs": [[l, a] for l, a in (d.get("refs") or [])][:40]})
+                         "ref_pairs": [[l, a] for l, a in (d.get("refs") or [])][:40],
+                         "ref_texts": d.get("ref_texts") or []})
     return {"state": task["status"]["state"].replace("TASK_STATE_", ""), "answer": _answer(task),
             "taskId": task["id"], "contextId": task.get("contextId"), "tools": rows, "memory": _memory(task),
             "seconds": round(time.time() - t0, 1)}
@@ -181,6 +182,13 @@ details.trail summary{cursor:pointer;color:var(--muted)}
 .law h3{font:600 13.5px/1.45 var(--text);margin:0 18px 5px 0}
 .tab{display:block;width:100%;text-align:left;background:var(--paper);border:0;border-right:4px solid var(--seal);border-radius:4px 0 0 4px;padding:4px 10px;margin-bottom:3px;font:13px/1.5 var(--ui)}
 .tab:hover{background:var(--seal-soft)}
+details.art{margin-bottom:3px}
+details.art>summary.tab{list-style:none;cursor:pointer;margin:0}
+details.art>summary.tab::-webkit-details-marker{display:none}
+details.art>summary.tab::after{content:" ▸";color:var(--muted)}
+details.art[open]>summary.tab::after{content:" ▾"}
+.src{margin:4px 18px 6px 0;padding:8px 10px;border-left:2px solid var(--rule);font:12.5px/1.65 var(--text);white-space:pre-wrap;max-height:320px;overflow-y:auto}
+.ask{background:none;border:0;color:var(--focus);font:12px/1.4 var(--ui);padding:0 0 6px;cursor:pointer;text-decoration:underline}
 
 /* 입력 */
 .composer{border-top:1px solid var(--rule);background:var(--leaf);padding:12px 24px 16px}
@@ -210,7 +218,7 @@ textarea:focus{outline:none;border-color:var(--focus)}
  <main id="thread"><div class="col" id="log"></div></main>
  <aside id="index" aria-label="근거 색인">
   <h2>근거 색인</h2>
-  <p id="indexNote">답에 쓰인 조문이 법령별로 모입니다. 누르면 그 조문을 다시 물어볼 수 있습니다.</p>
+  <p id="indexNote">답에 쓰인 조문이 법령별로 모입니다. 누르면 도구가 읽은 원문(별표 포함)을 펼쳐 볼 수 있습니다.</p>
   <div id="laws"></div>
  </aside>
 </div>
@@ -232,7 +240,7 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 // 한글에 바로 붙은 **굵게** 는 CommonMark 규칙상 풀리지 않아 미리 바꾼다
 const bold=s=>(s||"").replace(/\*\*([^*\n]+?)\*\*/g,"<strong>$1</strong>");
 const md=s=>window.marked?marked.parse(bold(s)):"<p>"+esc(s).replace(/\n/g,"<br>")+"</p>";
-let pending=null,conv={contextId:null,memory:null},busy=false;const index=new Map();
+let pending=null,conv={contextId:null,memory:null},busy=false;const index=new Map(),texts=new Map();
 
 function welcome(){
  $("#log").innerHTML=`<section class="welcome"><h2>어느 법 몇 조에 그렇게 적혀 있는지 찾아 드립니다</h2>
@@ -243,11 +251,23 @@ function welcome(){
 function renderIndex(){
  const box=$("#laws");box.innerHTML="";
  for(const [law,arts] of index){const d=document.createElement("div");d.className="law";
-  d.innerHTML=`<h3>${esc(law)}</h3>`+[...arts].map(a=>`<button type="button" class="tab" data-law="${esc(law)}" data-art="${esc(a)}">${esc(a)}</button>`).join("");box.appendChild(d)}
- box.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{$("#q").value=`${t.dataset.law} ${t.dataset.art} 원문과 상위·하위 조문 보여줘`;grow();$("#q").focus()});
+  d.innerHTML=`<h3>${esc(law)}</h3>`+[...arts].map(a=>{const src=textOf(law,a),ask=`<button type="button" class="ask" data-law="${esc(law)}" data-art="${esc(a)}">이 조문 다시 묻기</button>`;
+   // 도구가 보여 준 원문이 있으면 펼쳐 읽게 하고, 없으면 다시 묻기만 둔다
+   return src?`<details class="art"><summary class="tab">${esc(a)}</summary><div class="src">${esc(src)}</div>${ask}</details>`
+    :`<button type="button" class="tab ask-only" data-law="${esc(law)}" data-art="${esc(a)}">${esc(a)}</button>`}).join("");box.appendChild(d)}
+ box.querySelectorAll(".ask,.ask-only").forEach(t=>t.onclick=()=>{$("#q").value=`${t.dataset.law} ${t.dataset.art} 원문과 상위·하위 조문 보여줘`;grow();$("#q").focus()});
  $("#indexNote").hidden=index.size>0;
 }
+// 그 조문의 원문: 같은 조문 → 그 조문을 담은 상위(별표 2 ⊃ 별표 2 제1호) → 그 아래 조각 순으로 찾는다
+function textOf(law,art){
+ const m=texts.get(law);if(!m)return "";if(m.has(art))return m.get(art);
+ const ks=[...m.keys()];const up=ks.filter(k=>art.startsWith(k)).sort((a,b)=>b.length-a.length)[0];if(up)return m.get(up);
+ const down=ks.filter(k=>k.startsWith(art));return down.map(k=>m.get(k)).join("\n\n");
+}
 function addRefs(tools,answer){
+ for(const t of tools)for(const [law,art,txt] of (t.ref_texts||[])){
+  if(!law||!art||!txt)continue;if(!texts.has(law))texts.set(law,new Map());
+  const m=texts.get(law);if((m.get(art)||"").length<txt.length)m.set(art,txt)}   // 같은 조문은 더 긴 글을 남긴다
  const flat=(answer||"").replace(/\s+/g,"");
  for(const t of tools)for(const [law,art] of (t.ref_pairs||[])){
   if(!law||!art||!flat.includes(law.replace(/\s+/g,""))||!flat.includes(art.replace(/\s+/g,"")))continue;   // 답에 나온 법령의, 답에 나온 조문만
@@ -292,7 +312,7 @@ async function send(){
 $("#send").onclick=send;
 $("#q").addEventListener("input",grow);
 $("#q").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
-$("#reset").onclick=()=>{pending=null;conv={contextId:null,memory:null};index.clear();renderIndex();welcome();setHint();$("#q").focus()};
+$("#reset").onclick=()=>{pending=null;conv={contextId:null,memory:null};index.clear();texts.clear();renderIndex();welcome();setHint();$("#q").focus()};
 welcome();setHint();
 </script></body></html>"""
 

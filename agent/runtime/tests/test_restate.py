@@ -68,3 +68,68 @@ async def test_no_restatement_without_prompt_or_when_resuming(monkeypatch, tmp_p
     prior = {"messages": [{"role": "user", "content": "앞 질문"}, {"role": "assistant", "content": "어느 시군구인가요?"}]}
     await loop.run_query("영천시", mcp=Mcp(), model=model, prior=prior)
     assert len(model.seen) == 1                                   # 되묻기에 답하는 재개
+
+
+async def test_restatement_that_invents_a_law_name_is_dropped(monkeypatch, tmp_path):
+    # 정리한 질문에 발화에 없는 법령 정식명이 생기면(기억으로 푼 별칭) 붙이지 않는다 — 실측 2026-10-27 PC1
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_law_loose_pattern", r"([가-힣 ]{2,40}?에 관한 법률)")
+    reply = '{"질문": "공직자청탁 및 부정청탁 금지에 관한 법률의 음식물 가액 한도", "짐작": ""}'
+    model = Model([{"answer": reply}, {"answer": "답"}])
+    await loop.run_query("청탁금지법상 음식물 한도는?", mcp=Mcp(), model=model)
+    assert model.seen[1][-1]["content"] == "청탁금지법상 음식물 한도는?"
+
+
+class TermMcp(Mcp):
+    def __init__(self):
+        self.called = []
+
+    async def list_tools(self):
+        return [*await super().list_tools(), {"name": "term_link", "description": "", "input_schema": {}}]
+
+    async def call(self, name, args):
+        self.called.append((name, args))
+        if args["word"] == "그린벨트":
+            return {"status": "ok", "facts": {"말": "그린벨트", "같은_뜻_법령용어": ["개발제한구역"]}, "message": "연계"}
+        return {"status": "failed", "facts": {"말": args["word"]}, "message": "연계 없음"}
+
+
+def _terms_on(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "restate_term_tool", "term_link")
+    monkeypatch.setattr(settings, "restate_term_arg", "word")
+    monkeypatch.setattr(settings, "restate_term_failed_pattern", ".")
+
+
+async def test_words_to_check_are_looked_up_in_the_term_links(monkeypatch, tmp_path):
+    # 정리 단계가 고른 일상어·별칭은 기억으로 바꾸지 않고 법제처 연계 자료로 확인해 질문 아래에 붙인다
+    _terms_on(monkeypatch, tmp_path)
+    mcp = TermMcp()
+    reply = '{"질문": "그린벨트에서 축대 설치 신고 요건", "짐작": "", "확인할 말": ["그린벨트", "축대", "GB구역"]}'
+    model = Model([{"answer": reply}, {"answer": "답"}])
+    await loop.run_query("그린벨트에 축대 쌓으려면 신고해야 돼?", mcp=mcp, model=model)
+    assert mcp.called == [("term_link", {"word": "그린벨트"}), ("term_link", {"word": "축대"})]   # 발화에 없는 말은 묻지 않는다
+    user = model.seen[1][-1]["content"]
+    assert user.startswith("그린벨트에 축대 쌓으려면")
+    assert "개발제한구역" in user and "연계 없음" in user
+
+
+async def test_term_lookup_is_off_without_the_tool(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    mcp = TermMcp()
+    reply = '{"질문": "그린벨트 주택", "짐작": "", "확인할 말": ["그린벨트"]}'
+    model = Model([{"answer": reply}, {"answer": "답"}])
+    await loop.run_query("그린벨트 주택", mcp=mcp, model=model)
+    assert mcp.called == []
+
+
+async def test_failed_lookups_are_shown_only_for_law_like_words(monkeypatch, tmp_path):
+    # 연계가 없는 말: 법령 이름 꼴이면 "확인되지 않음"을 붙이고(지어내지 않게), 다른 말은 붙이지 않는다(풀어 쓴 질문으로 찾게)
+    _terms_on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "restate_term_failed_pattern", r"(?:법|령)$")
+    mcp = TermMcp()
+    reply = '{"질문": "단통법과 제1종일반주거지역", "짐작": "", "확인할 말": ["단통법", "1종 일주"]}'
+    model = Model([{"answer": reply}, {"answer": "답"}])
+    await loop.run_query("단통법이랑 1종 일주 알려줘", mcp=mcp, model=model)
+    user = model.seen[1][-1]["content"]
+    assert "단통법: " in user and "1종 일주: " not in user

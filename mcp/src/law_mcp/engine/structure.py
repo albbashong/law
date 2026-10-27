@@ -47,3 +47,34 @@ def structure(store, doc_id: int, path: str) -> list[dict]:
                          for i in items][:ITEMS_MAX]
         out.append(entry)
     return out
+
+
+LEAD_CHARS = 300   # 딸린 문장 한 줄 길이 상한 — 요건은 대개 문장 앞부분에 있다
+
+
+def leads(store, doc_id: int, path: str, focus: str | None = None) -> list[str]:
+    """path 의 호·목이 딸린 상위 항·호의 문장들(위에서 아래로) — "제84조제1항: ①…".
+
+    focus 가 있으면(조 전체가 걸린 검색 결과) path 아래에서 그 낱말이 든 가장 깊은 조항을 기준으로 삼는다.
+    조문 자신(제목 줄)은 넣지 않는다 — 요건은 항·호의 문장에 있다.
+    """
+    target = path
+    if focus:
+        key = re.sub(r"\s+", "", focus)
+        deep = [u for u in store.units_with_prefix(doc_id, path) if key in re.sub(r"\s+", "", u["text"] or "")]
+        if deep:
+            target = max(deep, key=lambda u: u["path"].count("/"))["path"]
+    out = []
+    cur = store.unit(doc_id, target)
+    while cur and cur["parent_path"]:
+        parent = cur["parent_path"]
+        if parent.endswith("/-"):          # 항 번호 없는 조문 — 호의 부모는 조문 자신
+            break
+        if "/" not in parent:              # 조문까지 올라왔다
+            break
+        p = store.unit(doc_id, parent)
+        if not p:
+            break
+        out.append(f"{p['label']}: {excerpt((p['text'] or '').split(chr(10))[0], LEAD_CHARS)}")
+        cur = p
+    return out[::-1]

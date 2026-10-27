@@ -412,6 +412,54 @@ def unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, .
     return out
 
 
+def _law_names(messages: list[dict[str, Any]], skip: tuple[str, ...]) -> list[str]:
+    """도구 결과의 ANSWER_LAW_KEYS 값과 사용자 발화에서 ANSWER_LAW_LOOSE_PATTERN 으로 잡은 이름 — 공백 뺀 꼴."""
+    keys = {k.strip() for k in settings.answer_law_keys.split(",") if k.strip()}
+    names: list[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k in keys:
+                    names.extend(n for n in ([x] if isinstance(x, str) else x if isinstance(x, list) else [])
+                                 if isinstance(n, str))
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, str) or content in skip:
+            continue
+        if m.get("role") == "tool":
+            try:
+                walk(json.loads(content))
+            except ValueError:
+                pass
+        elif m.get("role") == "user":
+            names += re.findall(settings.answer_law_loose_pattern, content)
+    return [b for b in (re.sub(r"\s+", "", n) for n in names) if b]
+
+
+def loose_unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
+    """답에 「」 없이 쓴 법령 정식명(ANSWER_LAW_LOOSE_PATTERN) 중 이번 대화에 나온 법령명으로 끝나지 않는 것.
+
+    잡힌 말에 앞말이 붙을 수 있어 끝이 맞는지를 보고, 앞말 없이 이름 일부만 쓴 경우를 위해 반대 방향도 본다(공백 무시).
+    """
+    pattern = settings.answer_law_loose_pattern
+    if not pattern or not answer:
+        return []
+    known = _law_names(messages, skip)
+    out: list[str] = []
+    for hit in re.findall(pattern, answer):
+        name = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
+        bare = re.sub(r"\s+", "", name)
+        if name and not any(bare.endswith(k) or k.endswith(bare) for k in known) and name not in out:
+            out.append(name)
+    return out
+
+
 def _bare(text: str) -> str:
     """글자·숫자만 — 인용 대조용. JSON 에 실린 줄바꿈 표기(\\n)는 먼저 띄어 쓴다."""
     return re.sub(r"[^\w]|_", "", re.sub(r"\\[nrt]", " ", text))
@@ -443,6 +491,27 @@ def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...]
 def clean_answer(answer: str) -> str:
     """ANSWER_STRIP_PATTERN 에 맞는 표기(본문에 흘린 도구 호출 등)를 지운다."""
     return re.sub(settings.answer_strip_pattern, "", answer) if settings.answer_strip_pattern else answer
+
+
+def internal_names(answer: str, names: set[str] | list[str]) -> list[str]:
+    """답 본문에 나온 내부 이름(이번 실행의 도구 이름) — 사용자에게 보일 말이 아니다."""
+    return sorted(n for n in names if n and re.search(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])", answer))
+
+
+def drop_internal(answer: str, names: list[str]) -> str:
+    """내부 이름이 든 문장(표는 그 행)을 뺀다 — 되돌린 뒤에도 남았을 때의 마지막 정리."""
+    if not names:
+        return answer
+    hit = re.compile("|".join(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])" for n in names))
+    out = []
+    for line in answer.split("\n"):
+        if not hit.search(line):
+            out.append(line)
+        elif not line.lstrip().startswith("|"):
+            kept = " ".join(x for x in re.split(r"(?<=[.!?。])\s+", line.strip()) if not hit.search(x))
+            if kept:
+                out.append(kept)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def _flat(messages: list[dict[str, Any]]) -> str:
@@ -642,15 +711,16 @@ def with_focus(query: str, context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
-async def restated(model: Any, text: str, usage_total: dict[str, int]) -> str:
+async def restated(model: Any, text: str, usage_total: dict[str, int]) -> tuple[str, list[str]]:
     """RESTATE_PROMPT 로 발화를 정리한 줄들(중립 질문 + 짐작) — 도구 없이 한 번 부른다.
 
     같은 뜻을 다른 말투로 물어도 검색어·범위 판단·결론이 흔들리지 않게 하려는 것이다(일상어·약칭으로
     엉뚱한 법령을 찾고, "안 되죠?" 같은 짐작에 결론이 끌려가던 문제 — 실측 2026-10-27). 발화 원문은 고치지
-    않는다. 읽을 수 없거나, 정리한 질문에 발화에 없는 숫자가 들어가면(지어낸 값) 아무것도 붙이지 않는다.
+    않는다. 읽을 수 없거나, 정리한 질문에 발화에 없는 숫자나 법령명이 들어가면(지어낸 값·기억으로 푼 별칭)
+    아무것도 붙이지 않는다. 함께 돌려주는 확인할 말(RESTATE_TERMS_KEY)은 발화에 실제로 있는 것만 남긴다.
     """
     if not settings.restate_prompt:
-        return ""
+        return "", []
     prompt = (AGENT_DIR / settings.restate_prompt).read_text(encoding="utf-8")
     step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content": text}], [])
     for k in ("tokens_in", "tokens_out"):
@@ -660,16 +730,26 @@ async def restated(model: Any, text: str, usage_total: dict[str, int]) -> str:
     try:
         data = json.loads(reply[start:end + 1]) if 0 <= start < end else {}
     except ValueError:
-        return ""
+        return "", []
     question = str((data or {}).get(settings.restate_question_key) or "").strip() if isinstance(data, dict) else ""
     presumption = str(data.get(settings.restate_presumption_key) or "").strip() if question else ""
     if not question or any(n not in text for n in re.findall(r"\d+(?:\.\d+)?", question + presumption)):
-        return ""
+        return "", []
+    bare_text = re.sub(r"\s+", "", text)
+    named = [h if isinstance(h, str) else next((x for x in h if x), "")
+             for p in (settings.answer_law_pattern, settings.answer_law_loose_pattern) if p
+             for h in re.findall(p, question)]
+    if any(re.sub(r"\s+", "", n) not in bare_text for n in named if n.strip()):
+        logger.info("restate dropped (law name not in the utterance): %s", question)
+        return "", []
     lines = [settings.restate_question_line.format(question=question)]
     if presumption:
         lines.append(settings.restate_presumption_line.format(presumption=presumption))
-    logger.info("restate: %s | %s", question, presumption)
-    return "\n".join(lines)
+    raw_terms = data.get(settings.restate_terms_key) or []
+    terms = list(dict.fromkeys(t.strip() for t in (raw_terms if isinstance(raw_terms, list) else [raw_terms])
+                               if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_text))
+    logger.info("restate: %s | %s | terms=%s", question, presumption, terms)
+    return "\n".join(lines), terms[:settings.restate_terms_max]
 
 
 async def run_query(
@@ -729,7 +809,7 @@ async def run_query(
         usage_total = {"tokens_in": 0, "tokens_out": 0}
         asked = with_focus(query, context)
         # 질문 정리는 새 질문에만 — 재개는 되묻기에 답하는 것이라 앞 대화가 뜻을 정한다
-        neutral = "" if carried else await restated(model, asked, usage_total)
+        neutral, terms = ("", []) if carried else await restated(model, asked, usage_total)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *carried,
@@ -762,6 +842,22 @@ async def run_query(
             failures.append(_failure(exc.server, exc, 1))
             return done("unavailable")
         known_tools = {t["name"] for t in tools}
+        # 정리 단계가 고른 일상어·별칭 — 모델 기억 대신 연계 자료로 확인해 이번 질문 아래에 붙인다
+        if terms and settings.restate_term_tool in known_tools:
+            found = []
+            for word in terms:
+                try:
+                    res = await mcp.call(settings.restate_term_tool, {settings.restate_term_arg: word})
+                except Exception as exc:     # 확인 실패는 질문을 막지 않는다 — 정리 줄만 붙인 채 진행
+                    logger.warning("term link failed: %s: %s", word, exc)
+                    continue
+                failed = not (isinstance(res, Mapping) and res.get("status") == "ok")
+                if failed and not (settings.restate_term_failed_pattern
+                                   and re.search(settings.restate_term_failed_pattern, word)):
+                    continue        # 연계 없는 일반 말은 붙이지 않는다 — 정리한 질문으로 평소대로 찾는다
+                found.append(settings.restate_term_line.format(word=word, result=_for_model(res)))
+            if found:
+                messages[-1] = {**messages[-1], "content": messages[-1]["content"] + "\n" + "\n".join(found)}
         # 연결에 실패한 서버는 실패로 보고한다 — 답이 있으면 COMPLETED + errors
         # (부분 실패, 규격 4.3절).
         report_dead = getattr(mcp, "unavailable", None)
@@ -795,20 +891,26 @@ async def run_query(
                 bad = ungrounded(step["answer"], messages, cite_notes)
                 bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
                 bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
+                bad += [x for x in loose_unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
                 bad += [f"“{x}”" for x in misquoted(step["answer"], messages, cite_notes) if f"“{x}”" not in bad]
                 off = rate_unmatched(step["answer"], messages, cite_notes) if settings.answer_rate_check else []
                 missed = [m for m in mentions if _bare(m) not in _bare(step["answer"])]
+                leaks = internal_names(step["answer"], known_tools)
                 if missed and not cite_checked and round_idx + 1 < rounds_max:
                     logger.info("answer check: missing mentions=%s", missed)
                 # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
                 if bad or off:
                     logger.info("answer check: cites=%s rates=%s retry=%s", bad, off, not cite_checked)
-                if (bad or off or missed) and not cite_checked and round_idx + 1 < rounds_max:
+                if leaks:
+                    logger.info("answer check: internal names=%s retry=%s", leaks, not cite_checked)
+                if (bad or off or missed or leaks) and not cite_checked and round_idx + 1 < rounds_max:
                     cite_checked = True
                     messages.append({"role": "assistant", "content": step["answer"]})
                     note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(bad))] if bad else [])
                                     + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else [])
-                                    + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else []))
+                                    + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else [])
+                                    + ([settings.answer_internal_retry_text.format(names=", ".join(leaks))] if leaks else [])
+                                    + ([settings.answer_retry_tail] if settings.answer_retry_tail else []))
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
                     continue
@@ -821,10 +923,11 @@ async def run_query(
                         logger.info("answer review: %s", problems)
                         messages.append({"role": "assistant", "content": step["answer"]})
                         note = settings.answer_review_retry_text.format(problems="\n".join(f"- {p}" for p in problems))
+                        note += ("\n" + settings.answer_retry_tail) if settings.answer_retry_tail else ""
                         cite_notes += (note,)
                         messages.append({"role": "user", "content": note})
                         continue
-                answer = clean_answer(step["answer"])
+                answer = drop_internal(clean_answer(step["answer"]), leaks)
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))

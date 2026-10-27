@@ -5,7 +5,7 @@ from pydantic import Field
 
 from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
-from law_mcp.engine.structure import structure
+from law_mcp.engine.structure import leads, structure
 from law_mcp.engine.follow import deemed_items, follow, node
 from law_mcp.engine.resolve import close_name, find_doc, find_region, name_key, parse_article, suggest
 from law_mcp.tools.common import READ_ONLY, candidates_result, result, trace
@@ -77,6 +77,10 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
              "호출인자": {"law": doc["name"], "article": start.article}}   # 검색 결과와 같은 모양 — 이 조문 자신
     if doc.get("보정전"):
         facts["법령명_보정"] = f"'{doc['보정전']}'이라는 법령은 없어, 이름이 가장 가까운 '{doc['name']}'으로 조회했습니다."
+    if not path.startswith("별표") and "/" in path:   # 호·목은 딸린 항의 문장(적용 대상·요건)과 함께 읽는다
+        lead = leads(store, doc["doc_id"], path)
+        if lead:
+            facts["딸린_문장"] = lead
     if not path.startswith("별표") and "/" in path:   # 항·호 하나만 열었을 때 — 위로 올라가며 각 단계의 다른 항목 첫머리
         near, cur = [], path
         while "/" in cur:
@@ -87,9 +91,6 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
             cur = parent
         if near:
             facts["같은_조_다른_항목"] = near[:SIBLINGS_MAX]
-    names = store.aliases(doc["doc_id"])
-    if names:   # 답에 약칭을 써도 조회 결과로 확인된다
-        facts["약칭"] = names
     if path.startswith("별표") and ":" not in path:
         a = store.annex(doc["doc_id"], path[2:])
         items = store.annex_items(a["annex_id"])
@@ -105,6 +106,13 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     refs, over = pack(r.refs[1:], budget, s.excerpt_chars)
     facts["refs"] = refs
     facts["더_볼_연결"] = (r.more + over)[:10]
+    # 답에 약칭을 써도 조회 결과로 확인된다 — 연 법령과, 연결로 함께 실린 법령의 약칭
+    shown = {x["law"] for x in facts["refs"]}
+    names: list[str] = []
+    for did in dict.fromkeys([doc["doc_id"], *(x.doc_id for x in r.refs[1:] if x.law in shown)]):
+        names += [n for n in store.aliases(did) if n not in names]
+    if names:
+        facts["약칭"] = names
     fit(facts, s.facts_max_chars)
     msg = (f"{doc['name']} {start.article} 원문과 연결된 근거 {len(refs)}건입니다."
            " 더_볼_연결이 남아 있으면 law_article로 이어서 조회하세요.")

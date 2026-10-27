@@ -83,3 +83,32 @@ def test_quotes_must_appear_in_the_looked_up_text(monkeypatch):
     assert loop.misquoted("상황 – “공원에서 빵을 먹어도 되는지”를 묻는 질문입니다.", msgs) == []
     monkeypatch.setattr(settings, "answer_quote_pattern", "")
     assert loop.misquoted(made, msgs) == []
+
+
+LOOSE = r"([^\S\n]*[가-힣A-Za-z0-9·ㆍ][가-힣A-Za-z0-9·ㆍ \t]{1,60}?(?:에 관한 (?:특별)?법률|에 관한 특별조치법|에 관한 법|법률|법)[^\S\n]+시행(?:령|규칙)|[^\S\n]*[가-힣A-Za-z0-9·ㆍ][가-힣A-Za-z0-9·ㆍ \t]{1,60}?에 관한 (?:특별)?법률|[^\S\n]*[가-힣A-Za-z0-9·ㆍ][가-힣A-Za-z0-9·ㆍ \t]{1,60}?에 관한 특별조치법)"
+
+
+def test_unbracketed_full_law_names_must_end_with_a_looked_up_name(monkeypatch):
+    # 「」 없이 늘여 쓴 정식명도 조회 결과의 법령명(법령·약칭 값)으로 끝나야 한다 — 지어낸 정식명을 막는다
+    monkeypatch.setattr(settings, "answer_law_loose_pattern", LOOSE)
+    monkeypatch.setattr(settings, "answer_law_keys", "법령,약칭")
+    msgs = [tool({"법령": "부정청탁 및 금품등 수수의 금지에 관한 법률 시행령", "조문": "별표 1",
+                  "약칭": ["청탁금지법 시행령"]}),
+            tool({"결과": [{"법령": "부정청탁 및 금품등 수수의 금지에 관한 법률"}]})]
+    real = "청탁금지법(부정청탁 및 금품등 수수의 금지에 관한 법률)에 따라 이 법은 부정청탁 및 금품등 수수의 금지에 관한 법률 시행령 별표 1을 따릅니다."
+    assert loop.loose_unnamed_laws(real, msgs) == []
+    fake = "청탁금지법(공직자청탁 및 금품등 수수 제한에 관한 법률)에 따르면"
+    assert loop.loose_unnamed_laws(fake, msgs) == ["공직자청탁 및 금품등 수수 제한에 관한 법률"]
+    assert loop.loose_unnamed_laws("농지법 시행령 제3조", msgs) == ["농지법 시행령"]
+
+
+def test_unbracketed_names_written_by_the_user_count(monkeypatch):
+    monkeypatch.setattr(settings, "answer_law_loose_pattern", LOOSE)
+    monkeypatch.setattr(settings, "answer_law_keys", "법령")
+    msgs = [{"role": "user", "content": "농지법 시행령에 농업인 기준이 있나요?"}]
+    assert loop.loose_unnamed_laws("농지법 시행령 제3조를 보면", msgs) == []
+
+
+def test_loose_law_name_check_is_off_without_a_pattern(monkeypatch):
+    monkeypatch.setattr(settings, "answer_law_loose_pattern", "")
+    assert loop.loose_unnamed_laws("공직자청탁 제한에 관한 법률", []) == []

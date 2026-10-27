@@ -1,0 +1,22 @@
+{"dlytrmSearch": {
+    "검색결과개수": "2",
+    "키워드": "그린벨트",
+    "page": "1",
+    "target": "dlytrm",
+    "일상용어": [
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=21843",
+            "id": "1",
+            "일상용어명": "그린벨트",
+            "출처": ""
+        },
+        {
+            "용어간관계링크": "/DRF/lawService.do?OC=OC&target=dlytrmRlt&type=XML&MST=158391",
+            "id": "2",
+            "일상용어명": "그린벨트관리계획",
+            "출처": ""
+        }
+    ],
+    "section": "dlyTrm",
+    "numOfRows": "2"
+}}
