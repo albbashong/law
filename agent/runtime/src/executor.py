@@ -174,6 +174,10 @@ class Executor:
         existing_errors = any(a.name == "errors" for a in (store.get(task_id).artifacts or []))
         if errors or existing_errors:
             store.put_artifact(task_id, Artifact.data(task_id, "errors", errors))
+        # 답에서 뽑아 원문과 대조한 법령상의 값 — 이전 턴 것이 남지 않게 비었어도 덮는다
+        params = [p for p in (raw.get("parameters") or []) if isinstance(p, dict)]
+        if params or any(a.name == "parameters" for a in (store.get(task_id).artifacts or [])):
+            store.put_artifact(task_id, Artifact.data(task_id, "parameters", params))
 
         answer = shaped.get("message") or ""
 

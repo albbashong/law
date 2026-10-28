@@ -19,6 +19,7 @@ INSTRUCTIONS = """\
 상위·하위 근거를 함께 돌려준다.
 - 주소만 있으면 parcel_zoning 으로 용도지역·지목을 확인하거나, building_basis 에 address 로 넘긴다.
 - "무엇을 지을 수 있나"는 building_basis 하나로 시행령 별표·조례 별표·상위법·건폐율·용적률까지 나온다. 지을 것 없이 건폐율·용적률만이면 zone_ratios.
+- 대지·토지를 몇 ㎡까지 나눌 수 있는지(분할 제한면적)는 split_area — 법률→시행령→조례 위임을 따라 용도지역의 면적을 준다.
 - 특정 조문·별표는 law_article, 키워드로 찾을 때는 law_search, 용어의 뜻은 law_definition.
 - 그린벨트·김영란법처럼 법령에 그대로 안 나오는 일상어·별칭은 term_link 로 법령 용어·법령명을 확인하라.
 - 결과의 의제("…를 받은 것으로 본다") 관계: 의제·의제됨·의제_목록 은 원문 문구 그대로 설명하라.
@@ -40,8 +41,8 @@ def get_store() -> Store:
 
 
 def _tool_modules():
-    from law_mcp.tools import article, building_basis, definition, parcel, search, term_link
-    return (building_basis, parcel, article, search, definition, term_link)
+    from law_mcp.tools import article, building_basis, definition, parcel, search, split_area, term_link
+    return (building_basis, split_area, parcel, article, search, definition, term_link)
 
 
 def build_server() -> MCPServer:

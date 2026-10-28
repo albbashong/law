@@ -186,6 +186,11 @@ class Settings(BaseSettings):
         "사용자의 짐작으로 나눠 JSON {RESTATE_QUESTION_KEY, RESTATE_PRESUMPTION_KEY} 로 답하게 한다. 비우면 정리하지 않는다.")
     restate_question_key: str = Field(default="질문", description="질문 정리 JSON 에서 중립 질문의 키.")
     restate_presumption_key: str = Field(default="짐작", description="질문 정리 JSON 에서 사용자의 짐작(전제·기대)의 키.")
+    restate_story_key: str = Field(
+        default="",
+        description="질문 정리 JSON 에서 '예시가 필요한 질문' 판단(참/거짓)을 읽을 키. 참이면 STORY_PROMPT 로 "
+        "검증된 답을 이야기로 다시 쓴다(사용자가 예시를 달라고 하지 않아도). 비우면 쓰지 않는다.",
+    )
     restate_terms_key: str = Field(default="확인할 말", description="질문 정리 JSON 에서 확인할 일상어·별칭 목록을 읽을 키.")
     restate_term_tool: str = Field(
         default="", description="확인할 말을 법령 용어·법령명에 잇는 도구 이름(예: term_link). 비우거나 도구 목록에 없으면 묻지 않는다.")
@@ -256,6 +261,16 @@ class Settings(BaseSettings):
         "부분만 더 조회하세요. 여기 있는 조문을 다시 인용하려면 조회 인자로 다시 조회해 원문을 확인하세요.",
         description="이전 작업 블록의 머리말.",
     )
+    param_prompt: str = Field(
+        default="", description="파라미터 추출 지시 파일(AGENT_DIR 기준). 정하면 답이 정해진 뒤 한 번, 답에 나온 법령상의 값을 "
+        "JSON 목록 [{PARAM_VALUE_KEY, PARAM_UNIT_KEY, PARAM_BASIS_KEY, …}] 으로 뽑아 parameters 아티팩트로 싣는다. "
+        "값(단위 포함)과 근거 법령·조문이 이번 턴 도구 결과에 그대로 없는 항목은 버린다. 비우면 끈다.")
+    param_request_text: str = Field(
+        default="[질문]\n{question}\n\n[답]\n{answer}\n\n[조회 원문]\n{sources}",
+        description="파라미터 추출 단계에 넘기는 사용자 메시지 틀. {sources} 는 이번 턴 도구 결과.")
+    param_value_key: str = Field(default="값", description="추출 항목에서 값의 키.")
+    param_unit_key: str = Field(default="단위", description="추출 항목에서 단위의 키(원문 표기 그대로).")
+    param_basis_key: str = Field(default="근거", description="추출 항목에서 근거(법령명 + 조문)의 키.")
     story_prompt: str = Field(
         default="",
         description="이야기로 다시 쓰기 지시 파일(AGENT_DIR 기준). 정하면 모델에게 retell_as_story 도구를 주고, "

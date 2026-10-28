@@ -332,3 +332,14 @@ async def test_unreadable_review_passes_the_story(monkeypatch, tmp_path):
                        {"answer": "예를 들어 볼게요."}, {"answer": "잘 썼네요"}])
     raw = await loop.run_query("예시 줘봐", mcp=FakeMcp(), model=model)
     assert raw["answer"] == "예를 들어 볼게요."
+
+
+async def test_story_quoting_words_the_law_does_not_say_is_rewritten(monkeypatch, tmp_path):
+    # 이야기 속 조문 인용문도 답처럼 조회 원문과 대조한다 — 지어낸 따옴표 인용이면 다시 쓴다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_quote_pattern", r"“([^”\n]+)”")
+    model = FakeModel([STORY, LOOKUP, {"answer": "제25조가 정합니다."},
+                       {"answer": "예를 들어 볼게요. 법은 “가액이 넘으면 위반이 된다”고 정했어요(제25조)."},
+                       {"answer": "예를 들어 볼게요. 제25조에 따르면 할 수 있어요."}])
+    raw = await loop.run_query("예시 줘봐", mcp=FakeMcp(), model=model)
+    assert raw["answer"] == "예를 들어 볼게요. 제25조에 따르면 할 수 있어요."

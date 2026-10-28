@@ -592,9 +592,13 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
     feedback = ""
     for attempt in range(1, max(1, settings.story_attempts) + 1):
         story = await ask(system, request + feedback)
-        if not (story and (not settings.story_format_pattern or re.match(settings.story_format_pattern, story))
-                and not ungrounded(story, messages, cite_notes) and not mispaired(story, messages)):
-            logger.info("story: form=%s attempt=%d rejected: %s", form, attempt, story[:80].replace("\n", " "))
+        why = ("empty" if not story else "format" if settings.story_format_pattern
+               and not re.match(settings.story_format_pattern, story) else "")
+        why = why or "; ".join(f"{k}={v}" for k, v in (("cites", ungrounded(story, messages, cite_notes)),
+                                                       ("pairs", mispaired(story, messages)),
+                                                       ("quotes", misquoted(story, messages, cite_notes))) if v)
+        if why:
+            logger.info("story: form=%s attempt=%d rejected (%s): %s", form, attempt, why, story[:80].replace("\n", " "))
             continue
         problems = review_problems(await ask(review, settings.story_review_request_text.format(
             question=question, answer=answer, sources=sources, story=story))) if review else []
@@ -661,6 +665,45 @@ def story_sources(messages: list[dict[str, Any]]) -> str:
     return text if limit <= 0 or len(text) <= limit else text[:limit] + "\n[이하 생략]"
 
 
+async def extract_parameters(model: Any, question: str, answer: str, messages: list[dict[str, Any]],
+                             usage_total: dict[str, int]) -> list[dict[str, Any]]:
+    """PARAM_PROMPT 로 답에 나온 법령상의 값을 목록으로 뽑는다 — 도구 없이 한 번 부른다.
+
+    모델이 뽑은 값은 믿지 않고 원문과 대조한다: 값과 단위를 붙인 글자, 근거의 법령명과 조문 번호가 이번 턴 도구
+    결과에 공백 없이 그대로 있어야 남긴다. 읽을 수 없으면 빈 목록이다.
+    """
+    if not settings.param_prompt:
+        return []
+    prompt = (AGENT_DIR / settings.param_prompt).read_text(encoding="utf-8")
+    request = settings.param_request_text.format(question=question, answer=answer, sources=story_sources(messages))
+    step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content": request}], [])
+    for k in ("tokens_in", "tokens_out"):
+        usage_total[k] += (step.get("usage") or {}).get(k) or 0
+    reply = (step.get("answer") or "").strip()
+    start, end = reply.find("["), reply.rfind("]")
+    try:
+        items = json.loads(reply[start:end + 1]) if 0 <= start < end else []
+    except ValueError:
+        logger.info("parameters unreadable: %s", reply[:300])
+        return []
+    corpus = "".join(_bare(str(m.get("content") or "")) for m in messages if m.get("role") == "tool")
+    kept, dropped = [], []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        value = _bare(str(it.get(settings.param_value_key) or ""))
+        unit = _bare(str(it.get(settings.param_unit_key) or ""))
+        # 값에 단위까지 적었으면(수 아닌 글자가 있으면) 값 그대로, 아니면 값과 단위를 붙인 글자로 대조한다
+        value = value if re.search(r"[^\d.,]", value) else value + unit
+        basis = str(it.get(settings.param_basis_key) or "")
+        m = re.search(r"제\s*\d", basis)
+        law, article = (basis[:m.start()], basis[m.start():]) if m else (basis, "")
+        ok = value and value in corpus and _bare(law) and _bare(law) in corpus and _bare(article) in corpus
+        (kept if ok else dropped).append(it)
+    logger.info("parameters: kept=%d dropped=%s", len(kept), dropped or ([] if items else reply[:300]))
+    return kept
+
+
 def last_calls(context: dict[str, Any] | None) -> list[dict[str, Any]]:
     """작업 기억의 마지막 턴에서 한 조회들 → [{"tool", "args"}]. 모양이 맞지 않는 것은 뺀다."""
     mem = context.get(settings.memory_key) if isinstance(context, dict) else None
@@ -711,16 +754,17 @@ def with_focus(query: str, context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
-async def restated(model: Any, text: str, usage_total: dict[str, int]) -> tuple[str, list[str]]:
+async def restated(model: Any, text: str, usage_total: dict[str, int]) -> tuple[str, list[str], bool]:
     """RESTATE_PROMPT 로 발화를 정리한 줄들(중립 질문 + 짐작) — 도구 없이 한 번 부른다.
 
     같은 뜻을 다른 말투로 물어도 검색어·범위 판단·결론이 흔들리지 않게 하려는 것이다(일상어·약칭으로
     엉뚱한 법령을 찾고, "안 되죠?" 같은 짐작에 결론이 끌려가던 문제 — 실측 2026-10-27). 발화 원문은 고치지
     않는다. 읽을 수 없거나, 정리한 질문에 발화에 없는 숫자나 법령명이 들어가면(지어낸 값·기억으로 푼 별칭)
     아무것도 붙이지 않는다. 함께 돌려주는 확인할 말(RESTATE_TERMS_KEY)은 발화에 실제로 있는 것만 남긴다.
+    셋째 값은 예시가 필요한 질문이라는 판단(RESTATE_STORY_KEY) — 정리한 질문을 버려도 판단은 쓴다.
     """
     if not settings.restate_prompt:
-        return "", []
+        return "", [], False
     prompt = (AGENT_DIR / settings.restate_prompt).read_text(encoding="utf-8")
     step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content": text}], [])
     for k in ("tokens_in", "tokens_out"):
@@ -730,26 +774,28 @@ async def restated(model: Any, text: str, usage_total: dict[str, int]) -> tuple[
     try:
         data = json.loads(reply[start:end + 1]) if 0 <= start < end else {}
     except ValueError:
-        return "", []
+        return "", [], False
+    want = data.get(settings.restate_story_key) if settings.restate_story_key and isinstance(data, dict) else None
+    story = want is True or (isinstance(want, str) and want.strip().lower() == "true")
     question = str((data or {}).get(settings.restate_question_key) or "").strip() if isinstance(data, dict) else ""
     presumption = str(data.get(settings.restate_presumption_key) or "").strip() if question else ""
     if not question or any(n not in text for n in re.findall(r"\d+(?:\.\d+)?", question + presumption)):
-        return "", []
+        return "", [], story
     bare_text = re.sub(r"\s+", "", text)
     named = [h if isinstance(h, str) else next((x for x in h if x), "")
              for p in (settings.answer_law_pattern, settings.answer_law_loose_pattern) if p
              for h in re.findall(p, question)]
     if any(re.sub(r"\s+", "", n) not in bare_text for n in named if n.strip()):
         logger.info("restate dropped (law name not in the utterance): %s", question)
-        return "", []
+        return "", [], story
     lines = [settings.restate_question_line.format(question=question)]
     if presumption:
         lines.append(settings.restate_presumption_line.format(presumption=presumption))
     raw_terms = data.get(settings.restate_terms_key) or []
     terms = list(dict.fromkeys(t.strip() for t in (raw_terms if isinstance(raw_terms, list) else [raw_terms])
                                if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_text))
-    logger.info("restate: %s | %s | terms=%s", question, presumption, terms)
-    return "\n".join(lines), terms[:settings.restate_terms_max]
+    logger.info("restate: %s | %s | terms=%s story=%s", question, presumption, terms, story)
+    return "\n".join(lines), terms[:settings.restate_terms_max], story
 
 
 async def run_query(
@@ -809,7 +855,7 @@ async def run_query(
         usage_total = {"tokens_in": 0, "tokens_out": 0}
         asked = with_focus(query, context)
         # 질문 정리는 새 질문에만 — 재개는 되묻기에 답하는 것이라 앞 대화가 뜻을 정한다
-        neutral, terms = ("", []) if carried else await restated(model, asked, usage_total)
+        neutral, terms, story_need = ("", [], False) if carried else await restated(model, asked, usage_total)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *carried,
@@ -865,7 +911,10 @@ async def run_query(
             failures.append(_failure(label, McpUnavailable(label, exc), 1))
 
         cite_checked = reviewed = force_answer = False
-        story_wanted = replayed = False
+        # 정리 단계가 예시가 필요한 질문으로 보면 요청이 없어도 이야기로 다시 쓴다. 이때는 앞 턴 조회를 다시
+        # 돌리지 않는다 — 그건 앞 답을 이야기로 해 달라는 요청(retell_as_story 호출)일 때의 일이다.
+        story_wanted = replayed = bool(story_need and settings.story_prompt)
+        story_called = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
         cite_notes: tuple[str, ...] = (work,) if work else ()
@@ -931,10 +980,11 @@ async def run_query(
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
-                elif story_wanted:
+                params = [] if bad else await extract_parameters(model, query, answer, messages, usage_total)
+                if not (bad and settings.answer_unverified_text) and story_wanted:
                     answer = await retell(model, query, answer, messages, cite_notes, usage_total,
                                           story_form, story_laws(tool_results))
-                return done("answer", answer=answer, ungrounded=bad)
+                return done("answer", answer=answer, ungrounded=bad, parameters=params)
 
             calls = _tool_calls_from_step(step)
             messages.append(_assistant_message(step, calls))
@@ -974,6 +1024,8 @@ async def run_query(
                     return done("ask", ask=ask)
 
                 if name == STORY:
+                    if not story_called:
+                        story_called, replayed = True, False
                     story_wanted = True
                     story_form = args.get("form") if isinstance(args, dict) else None
                     logger.info("story requested: form=%s", story_form)

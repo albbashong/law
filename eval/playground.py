@@ -130,6 +130,10 @@ header h1{font:600 17px/1.3 var(--ui);margin:0;letter-spacing:-.01em}
 header p{margin:0;color:var(--muted);font-size:13px;flex:1}
 .ghost{border:1px solid var(--rule);background:transparent;border-radius:6px;padding:5px 12px;font-size:13px}
 .ghost:hover{border-color:var(--muted)}
+.pick{position:relative}
+#exPanel{position:absolute;right:0;top:calc(100% + 6px);z-index:5;width:min(440px,calc(100vw - 32px));max-height:70vh;overflow-y:auto;background:var(--leaf);border:1px solid var(--rule);border-radius:8px;padding:14px 14px 4px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+#exPanel .group{margin-bottom:12px}
+#exPanel .group button{font-size:13.5px;padding:8px 12px}
 .shell{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
 #thread{overflow-y:auto;padding:28px 24px 24px}
 .col{max-width:760px;margin:0 auto}
@@ -212,6 +216,8 @@ textarea:focus{outline:none;border-color:var(--focus)}
 <header>
  <h1>법령 근거 찾기</h1>
  <p>질문하면 법령·조례 원문에서 근거 조문을 찾아 답합니다. 허가 여부를 판정하지는 않습니다.</p>
+ <div class="pick"><button class="ghost" id="examples" type="button" aria-expanded="false" aria-controls="exPanel">예시 질문</button>
+  <div id="exPanel" hidden></div></div>
  <button class="ghost" id="reset" type="button">새 대화</button>
 </header>
 <div class="shell">
@@ -233,7 +239,7 @@ const GROUPS=[
  ["땅과 건축",["경상북도 영천시 금호읍 신월리 1-51에 공장 지을 수 있어?","영천시 자연녹지지역에 일반음식점 낼 수 있어?","부산 해운대구 제1종일반주거지역에 카페 열 수 있어?","청주시 자연녹지지역 임야에 주유소 지으려면 근거 법령이랑 필요한 허가가 뭐야?"]],
  ["조문과 위임 관계",["건축법 제11조 건축허가에서 대통령령으로 정한 내용이 뭐야? 하위 법령 조문까지 찾아줘","국토계획법 시행령 제84조 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있어?","영천시 도시계획 조례 제25조의 상위 법령 근거가 뭐야?"]],
  ["생활 속 법령",["혈중알코올농도 0.03%로 운전하면 어떤 처벌을 받아?","공직자에게 제공할 수 있는 음식물 가액 한도는 얼마야?"]]];
-const TOOL={building_basis:"용도별 건축 근거",zone_ratios:"건폐율·용적률",parcel_zoning:"필지 조회",law_article:"조문 열람",law_search:"법령 검색",law_definition:"정의 찾기"};
+const TOOL={building_basis:"용도별 건축 근거",zone_ratios:"건폐율·용적률",split_area:"분할 제한면적",parcel_zoning:"필지 조회",law_article:"조문 열람",law_search:"법령 검색",law_definition:"정의 찾기"};
 const ARG={use:"용도",region:"지역",zone:"용도지역",address:"주소",land_category:"지목",law:"법령",article:"조문",query:"검색어",term:"용어",scope:"범위",chain:"방향",depth:"깊이",limit:"개수"};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -247,6 +253,16 @@ function welcome(){
  <p>주소, 지역과 용도지역, 법령 이름 중 아는 것으로 물어보세요. 답에는 근거 조문과 확인해야 할 조건이 함께 나옵니다.</p>
  ${GROUPS.map(([g,qs])=>`<div class="group"><h3>${esc(g)}</h3>${qs.map(q=>`<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`).join("")}</section>`;
  $("#log").querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>{$("#q").value=b.dataset.q;grow();send()});
+}
+// 대화 중에도 예시를 꺼내 쓴다 — 고르면 입력창에 넣기만 한다(이어지는 대화에 바로 보내지 않는다)
+function examples(){
+ const panel=$("#exPanel"),btn=$("#examples");
+ panel.innerHTML=GROUPS.map(([g,qs])=>`<div class="group"><h3>${esc(g)}</h3>${qs.map(q=>`<button type="button" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`).join("");
+ const show=on=>{panel.hidden=!on;btn.setAttribute("aria-expanded",String(on))};
+ btn.onclick=e=>{e.stopPropagation();show(panel.hidden)};
+ panel.querySelectorAll("[data-q]").forEach(b=>b.onclick=()=>{$("#q").value=b.dataset.q;grow();show(false);$("#q").focus()});
+ document.addEventListener("click",e=>{if(!panel.hidden&&!panel.contains(e.target))show(false)});
+ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!panel.hidden){show(false);btn.focus()}});
 }
 function renderIndex(){
  const box=$("#laws");box.innerHTML="";
@@ -313,7 +329,7 @@ $("#send").onclick=send;
 $("#q").addEventListener("input",grow);
 $("#q").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
 $("#reset").onclick=()=>{pending=null;conv={contextId:null,memory:null};index.clear();texts.clear();renderIndex();welcome();setHint();$("#q").focus()};
-welcome();setHint();
+welcome();examples();setHint();
 </script></body></html>"""
 
 
