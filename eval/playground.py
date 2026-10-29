@@ -43,7 +43,17 @@ def _answer(task):
     return " ".join(p.get("text", "") for p in msg.get("parts", []))
 
 
-def ask(text, task_id=None, context_id=None, memory=None):
+PROGRESS = {}   # 요청 id → 에이전트가 태스크 메타데이터(진행 확장)에 남긴 마지막 진행 문구
+
+
+def _progress(task):
+    for v in (task.get("metadata") or {}).values():
+        if isinstance(v, dict) and v.get("message"):
+            return v["message"]
+    return None
+
+
+def ask(text, task_id=None, context_id=None, memory=None, rid=None):
     """오케스트레이터 흉내: 같은 대화는 같은 contextId 로, 에이전트가 낸 memory 는 다음 호출의 data 파트로 돌려준다."""
     trace = Path(ARGS.trace)
     before = trace.read_text().count("\n") if trace.exists() else 0
@@ -60,6 +70,8 @@ def ask(text, task_id=None, context_id=None, memory=None):
     end = time.time() + 300
     while time.time() < end:
         task = _req(f"{ARGS.agent}/tasks/{task['id']}")
+        if rid and (msg := _progress(task)):
+            PROGRESS[rid] = msg
         if task["status"]["state"] in TERMINAL:
             break
         time.sleep(1.0)
@@ -92,6 +104,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send(200, PAGE, "text/html; charset=utf-8")
+        elif self.path.startswith("/api/progress?rid="):
+            rid = self.path.split("=", 1)[1]
+            self._send(200, json.dumps({"message": PROGRESS.get(rid)}, ensure_ascii=False), "application/json; charset=utf-8")
         else:
             self._send(404, "not found", "text/plain")
 
@@ -100,7 +115,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, "not found", "text/plain")
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-            out = ask(body["text"], body.get("taskId"), body.get("contextId"), body.get("memory"))
+            rid = str(body.get("rid") or "")
+            try:
+                out = ask(body["text"], body.get("taskId"), body.get("contextId"), body.get("memory"), rid)
+            finally:
+                PROGRESS.pop(rid, None)
             self._send(200, json.dumps(out, ensure_ascii=False), "application/json; charset=utf-8")
         except Exception as e:  # noqa: BLE001 — 시험 페이지: 오류를 그대로 보여 준다
             self._send(500, json.dumps({"error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8")
@@ -308,12 +327,16 @@ async function send(){
  const turn=document.createElement("section");turn.className="turn";
  // 몇 번째 질문인지 구분선에 적는다 — 되물음에 답한 것도 한 턴이다
  const head=`<div class="sep">${$("#log").querySelectorAll(".turn").length+1}번째 질문</div><p class="q">${esc(text)}</p>`;
- turn.innerHTML=`${head}<div class="waiting" role="status"><i></i><span>원문에서 근거를 찾는 중 (0초)</span></div>`;
+ turn.innerHTML=`${head}<div class="waiting" role="status"><i></i><span>질문을 보내는 중 (0초)</span></div>`;
  $("#log").appendChild(turn);turn.scrollIntoView({block:"start",behavior:"smooth"});
  $("#q").value="";grow();
- const t0=Date.now(),timer=setInterval(()=>{const s=turn.querySelector(".waiting span");if(s)s.textContent=`원문에서 근거를 찾는 중 (${Math.round((Date.now()-t0)/1000)}초)`},1000);
+ // 에이전트가 단계마다 남기는 진행 문구(질문 정리, 무엇을 조회하는지, 점검 등)를 1초마다 받아 대기 줄에 보인다
+ const rid=Math.random().toString(36).slice(2);let doing="질문을 보내는 중";
+ const t0=Date.now(),timer=setInterval(async()=>{
+  try{const p=await (await fetch(`/api/progress?rid=${rid}`)).json();if(p.message)doing=p.message}catch(e){}
+  const s=turn.querySelector(".waiting span");if(s)s.textContent=`${doing} (${Math.round((Date.now()-t0)/1000)}초)`},1000);
  try{
-  const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,contextId:conv.contextId,memory:conv.memory,...(pending||{})})});
+  const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,rid,contextId:conv.contextId,memory:conv.memory,...(pending||{})})});
   const d=await r.json();if(d.error)throw new Error(d.error);
   pending=d.state==="INPUT_REQUIRED"?{taskId:d.taskId,contextId:d.contextId}:null;
   conv.contextId=d.contextId||conv.contextId;if(d.memory)conv.memory=d.memory;

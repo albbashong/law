@@ -181,6 +181,23 @@ class Settings(BaseSettings):
         default="조회할 수 있는 횟수의 끝입니다. 더 조회하지 말고 지금까지 조회한 결과만으로 답하세요. 확인하지 못한 "
         "부분은 무엇을 찾아봤고 무엇을 확인하지 못했는지 밝히고, 조회 결과에 없는 조문은 인용하지 않습니다.",
         description="마지막 라운드(ROUNDS_MAX)에 도구 없이 답하게 하는 지시 — 라운드 상한 실패 대신 찾은 만큼 답한다.")
+    # ── 진행 알림 — 단계마다 사용자 말로 무엇을 하는지 알린다(A2A progress 확장). 도구 이름을 그대로 보이지 않는다.
+    progress_tool_labels: str = Field(
+        default="", description='도구 이름 → 사용자에게 보일 진행 문구(JSON, 예: {"split_area": "분할 제한면적을 찾는 중"}). '
+        "없으면 '도구 이름 조회 중'.")
+    progress_arg_keys: str = Field(
+        default="", description="조회 알림에 값을 보일 인자 이름(쉼표 구분, 순서대로). 비우면 문자열 인자 전부 — 깊이·범위 같은 "
+        "내부 인자를 빼려면 정한다.")
+    progress_tool_text: str = Field(default="{label}{args}", description="조회 단계 알림 틀. {args} 는 ' — 인자값, …'.")
+    progress_restate_text: str = Field(default="질문을 정리하는 중", description="질문 정리 단계 알림.")
+    progress_term_text: str = Field(default="'{word}'을(를) 법령 용어로 확인하는 중", description="확인할 말을 잇는 단계 알림.")
+    progress_replay_text: str = Field(default="앞 질문에서 찾은 근거를 다시 여는 중", description="앞 턴 조회를 다시 실행할 때 알림.")
+    progress_read_text: str = Field(default="찾은 원문을 읽고 답을 정리하는 중", description="조회 뒤 모델이 다음을 정할 때 알림.")
+    progress_check_text: str = Field(default="답의 인용·수치가 원문과 맞지 않아 고치는 중", description="인용·수치 검증 되돌림 알림.")
+    progress_review_text: str = Field(default="답을 원문과 대조해 점검하는 중", description="답 점검 단계 알림.")
+    progress_fix_text: str = Field(default="점검에서 나온 문장을 고치는 중", description="점검 되돌림 알림.")
+    progress_story_text: str = Field(default="예시로 풀어 쓰는 중", description="예시 이야기 단계 알림.")
+    progress_params_text: str = Field(default="답에서 법령상의 값을 뽑는 중", description="파라미터 추출 단계 알림.")
     restate_prompt: str = Field(
         default="", description="질문 정리 지시 파일(AGENT_DIR 기준). 도구 루프 전에 한 번, 발화를 법률 용어의 중립 질문과 "
         "사용자의 짐작으로 나눠 JSON {RESTATE_QUESTION_KEY, RESTATE_PRESUMPTION_KEY} 로 답하게 한다. 비우면 정리하지 않는다.")

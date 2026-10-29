@@ -891,6 +891,20 @@ async def restated(model: Any, text: str, usage_total: dict[str, int],
     return "\n".join(lines), terms[:settings.restate_terms_max], story, follow, lead
 
 
+def tool_progress(name: str, args: Mapping[str, Any] | None) -> str:
+    """조회 단계 알림 — 도구의 사용자 이름(PROGRESS_TOOL_LABELS)과 비어 있지 않은 인자값."""
+    try:
+        labels = json.loads(settings.progress_tool_labels) if settings.progress_tool_labels else {}
+    except ValueError:
+        labels = {}
+    keys = [k.strip() for k in settings.progress_arg_keys.split(",") if k.strip()]
+    args = args or {}
+    picked = [args.get(k) for k in keys] if keys else list(args.values())
+    values = [v.strip() for v in picked if isinstance(v, str) and v.strip()]
+    return settings.progress_tool_text.format(label=labels.get(name, f"{name} 조회 중"),
+                                              args=f" — {', '.join(values[:3])}" if values else "")
+
+
 async def run_query(
     query: str,
     *,
@@ -952,10 +966,16 @@ async def run_query(
         prev_q = last_question(context) if work else ""
         restate_in = asked + (f"\n{settings.restate_prior_line.format(question=prev_q)}"
                               if prev_q and settings.restate_prior_line else "")
+        def say(text: str, fraction: float = 0.0) -> None:
+            if on_progress is not None and text:
+                on_progress(fraction, text)
+
         try:
             listed, down = await mcp.list_tools(), None
         except McpUnavailable as exc:
             listed, down = [], exc
+        if not (carried or down) and settings.restate_prompt:
+            say(settings.progress_restate_text)
         neutral, terms, story_need, follow, lead = (("", [], False, False, "") if carried or down
                                                     else await restated(model, restate_in, usage_total, listed))
         messages: list[dict[str, Any]] = [
@@ -994,6 +1014,7 @@ async def run_query(
             found = []
             for word in terms:
                 try:
+                    say(settings.progress_term_text.format(word=word))
                     res = await mcp.call(settings.restate_term_tool, {settings.restate_term_arg: word})
                 except Exception as exc:     # 확인 실패는 질문을 막지 않는다 — 정리 줄만 붙인 채 진행
                     logger.warning("term link failed: %s: %s", word, exc)
@@ -1031,6 +1052,8 @@ async def run_query(
                        if c["tool"] in known_tools and c["tool"] not in RESERVED_TOOLS]
             ids = [f"replay_{i}" for i in range(len(replays))]
             if replays:
+                say(settings.progress_replay_text)
+            if replays:
                 messages.append({"role": "assistant", "content": None, "tool_calls": [
                     {"id": cid, "type": "function",
                      "function": {"name": c["tool"], "arguments": json.dumps(c["args"], ensure_ascii=False)}}
@@ -1064,6 +1087,8 @@ async def run_query(
             if round_idx == rounds_max - 1 and round_idx > 0 and not force_answer and calls_made:
                 force_answer = True     # 라운드 상한에서 실패하지 않고 찾은 만큼 답한다
                 messages.append({"role": "user", "content": settings.last_round_text})
+            if calls_made and messages[-1].get("role") == "tool":
+                say(settings.progress_read_text, min(round_idx / rounds_max, 1.0))
             if lead and not force_answer:
                 # 정리 단계가 고른 도구 — 첫 라운드는 그 도구 하나만 주고 꼭 부르게 한다(인자는 모델이 채운다)
                 step = await model.next_step(messages, [t for t in tools if t["name"] == lead], require=True)
@@ -1099,6 +1124,7 @@ async def run_query(
                     logger.info("answer check: reversed conditions=%s retry=%s", flips, not cite_checked)
                 if (bad or off or missed or leaks or flips) and not cite_checked and round_idx + 1 < rounds_max:
                     cite_checked = True
+                    say(settings.progress_check_text)
                     messages.append({"role": "assistant", "content": step["answer"]})
                     note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(bad))] if bad else [])
                                     + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else [])
@@ -1118,9 +1144,11 @@ async def run_query(
                         hinted = reversed_conditions(step["answer"], messages)
                     if hinted:
                         logger.info("answer check: conditions to review=%s", hinted)
+                    say(settings.progress_review_text)
                     problems = await answer_review(model, query, step["answer"], messages, usage_total, hinted)
                     if problems:
                         logger.info("answer review: %s", problems)
+                        say(settings.progress_fix_text)
                         messages.append({"role": "assistant", "content": step["answer"]})
                         note = settings.answer_review_retry_text.format(problems="\n".join(f"- {p}" for p in problems))
                         note += ("\n" + settings.answer_retry_tail) if settings.answer_retry_tail else ""
@@ -1131,8 +1159,11 @@ async def run_query(
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
+                if not bad and settings.param_prompt:
+                    say(settings.progress_params_text)
                 params = [] if bad else await extract_parameters(model, query, answer, messages, usage_total)
                 if not (bad and settings.answer_unverified_text) and story_wanted:
+                    say(settings.progress_story_text)
                     story = await retell(model, query, answer, messages, cite_notes, usage_total,
                                          story_form, story_laws(tool_results))
                     # 덧붙이는 틀이 있으면 사실 답은 그대로 두고 이야기를 아래에 붙인다(이야기가 사실 답이 되지 않게)
@@ -1199,7 +1230,7 @@ async def run_query(
 
                 if on_progress is not None:
                     fraction = min((round_idx + 1) / rounds_max, 1.0)
-                    on_progress(fraction, f"{name} 실행 중")
+                    on_progress(fraction, tool_progress(name, args))
 
                 try:
                     result = await mcp.call(name, args)
