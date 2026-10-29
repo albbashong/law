@@ -78,13 +78,13 @@ async def test_judged_example_does_not_replay_the_previous_turn(monkeypatch, tmp
     assert {"law": "다른법", "article": "제1조"} not in calls
 
 
-async def test_follow_up_keeps_the_factual_answer(monkeypatch, tmp_path):
-    # 실측 2026-10-29 W6: "최소필지분할면적은?"(앞 질문에 이어짐)이 지어낸 면적의 예시 이야기로만 나갔다 — 앞 턴이 이미
-    # 예시를 줬고 이어지는 질문은 앞 답에서 좁혀 묻는 것이라, 이어짐이면 판단만으로 이야기로 바꾸지 않는다
+async def test_follow_up_asking_for_an_example_gets_one(monkeypatch, tmp_path):
+    # 실측 2026-10-29 P01~P06: "예를 들어 설명해줘"(앞 질문에 이어짐)에 예시가 나오지 않았다 — 이야기를 사실 답 아래에
+    # 덧붙이게 된 뒤로는 이어지는 질문도 판단대로 예시를 붙인다(W6 처럼 사실 답이 사라지는 일이 없다)
     _on(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "restate_follow_key", "이어짐")
-    context = {"memory": {"turns": [{"q": "다문리 160 분할 가능해?", "a": "앞 답", "calls": []}]}}
-    model = Model([{"answer": '{"질문": "다문리 160 최소분할면적", "짐작": "", "예시": true, "이어짐": true}'},
+    context = {"memory": {"turns": [{"q": "공무원한테 밥 사도 돼?", "a": "앞 답", "calls": []}]}}
+    model = Model([{"answer": '{"질문": "음식물 제공 가액 기준 예시", "짐작": "", "예시": true, "이어짐": true}'},
                    LOOKUP, {"answer": "제25조가 정합니다."}, {"answer": STORY}])
-    raw = await loop.run_query("최소필지분할면적은?", mcp=Mcp(), model=model, context=context)
-    assert raw["answer"] == "제25조가 정합니다."
+    raw = await loop.run_query("예를 들어 설명해줘", mcp=Mcp(), model=model, context=context)
+    assert raw["answer"] == STORY

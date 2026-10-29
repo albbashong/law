@@ -356,6 +356,12 @@ class Settings(BaseSettings):
     story_review_retry_text: str = Field(
         default="\n\n[고칠 점] 앞서 쓴 이야기를 점검했더니 다음 문제가 있었습니다. 고쳐서 처음부터 다시 쓰세요.\n{problems}",
         description="고칠 점을 다시 쓰기 요청 뒤에 붙이는 틀.")
+    story_review_hint_text: str = Field(
+        default="", description="조문-내용 짝 검사(misattributed)가 의심한 문장을 이야기 점검 요청 뒤에 붙이는 틀({hints}). "
+        "정하면 바로 버리지 않고 점검이 판단하게 한다. 비우거나 점검이 없으면 걸린 즉시 다시 쓰게 한다.")
+    story_unverified_text: str = Field(
+        default="", description="사실 답에 확인 안 된 인용이 남았을 때 이야기 요청 뒤에 붙이는 틀({cites}) — 그 인용을 쓰지 말라고 "
+        "알리고 이야기는 그대로 만든다. 비우면 확인 안 된 인용이 남은 답은 이야기로 바꾸지 않는다.")
     story_plan_prompt: str = Field(
         default="", description="이야기 계획 지시 파일(AGENT_DIR 기준). 정하면 이야기 전에 쓸 사유·관계를 JSON 으로 "
         "고르게 하고, 대조를 통과한 계획을 이야기 요청에 붙인다. 비우면 계획 없이 바로 쓴다.")

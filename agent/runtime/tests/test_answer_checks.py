@@ -112,3 +112,14 @@ def test_unbracketed_names_written_by_the_user_count(monkeypatch):
 def test_loose_law_name_check_is_off_without_a_pattern(monkeypatch):
     monkeypatch.setattr(settings, "answer_law_loose_pattern", "")
     assert loop.loose_unnamed_laws("공직자청탁 제한에 관한 법률", []) == []
+
+
+def test_law_names_quoted_inside_looked_up_text_count(monkeypatch):
+    # 실측 2026-10-29 P01: 조회한 농지법 제37조 원문에 「국토의 계획 및 이용에 관한 법률」이 있는데, 법령명 칸만 보아
+    # 답·이야기에 쓴 그 이름을 확인 안 된 법령으로 걸었다 — 원문 안의 법령명(ANSWER_LAW_PATTERN)도 확인된 이름이다
+    monkeypatch.setattr(settings, "answer_law_loose_pattern", LOOSE)
+    monkeypatch.setattr(settings, "answer_law_pattern", r"「([^」\n]+)」")
+    monkeypatch.setattr(settings, "answer_law_keys", "법령")
+    msgs = [tool({"법령": "농지법", "원문": "다만, 「국토의 계획 및 이용에 관한 법률」에 따른 도시지역"})]
+    assert loop.loose_unnamed_laws("국토의 계획 및 이용에 관한 법률에 따른 도시지역", msgs) == []
+    assert loop.loose_unnamed_laws("건축물의 분양에 관한 법률", msgs) == ["건축물의 분양에 관한 법률"]

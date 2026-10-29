@@ -334,7 +334,8 @@ def misattributed(story: str, answer: str) -> list[str]:
 
     답의 표(법령 | 조문 | 내용 …)에서 행마다 그 행에만 있는 말(다른 행의 내용에 없는 말)을 모은다. 이야기의 한 문장(표의
     한 행도 한 문장으로 본다)이 어떤 행의 조문을 적었는데 그 행에만 있는 말을 하나도 담지 않았으면 다른 내용에 그 조문을
-    붙인 것으로 본다. 그 행에만 있는 말이 없는 행은 보지 않는다. 낱말 목록 없이 답의 표에서만 판단한다.
+    붙인 것으로 보되, 다른 행에만 있는 말을 담았을 때만이다(공통어로만 쓴 맞는 문장을 걸지 않게). 그 행에만 있는 말이
+    없는 행은 보지 않는다. 낱말 목록 없이 답의 표에서만 판단한다.
     """
     rows = []
     for line in answer.splitlines():
@@ -344,8 +345,14 @@ def misattributed(story: str, answer: str) -> list[str]:
             rows.append((cells[0], cells[1], " ".join(cells[2:])))
     if len(rows) < 2:
         return []
-    words = [set(WORD.findall(r[2])) - set(WORD.findall(r[0] + " " + r[1])) for r in rows]
-    only = [w - set().union(*(words[:i] + words[i + 1:])) for i, w in enumerate(words)]
+    # 법령·조문 칸에 나오는 말(법령명·별표·호 번호)은 어느 행에서든 내용으로 치지 않는다 — 내용 칸이 다른 조문을
+    # 인용하면("건축법 시행령 별표 1 제1호(단독주택)") 그 인용이 내용의 말로 잡혀, 이야기 문장의 인용과 엉뚱하게 겹친다
+    cited = {w for r in rows for w in WORD.findall(r[0] + " " + r[1])}
+    words = [set(WORD.findall(r[2])) - cited for r in rows]
+    # 다른 행에 같은 말(조사만 붙은 꼴 포함 — 한쪽이 다른 쪽의 앞부분)이 없는 말만 그 행의 말이다 — "단독주택" / "단독주택이"
+    def shared(x: str, i: int) -> bool:
+        return any(x.startswith(y) or y.startswith(x) for j, w in enumerate(words) if j != i for y in w)
+    only = [{x for x in w if not shared(x, i)} for i, w in enumerate(words)]
     squash = lambda t: re.sub(r"\s+", "", t)  # noqa: E731
     problems = []
     for sentence in (x.strip() for x in re.split(r"(?<=[.!?。])\s+|\n", story) if x.strip()):
@@ -355,6 +362,10 @@ def misattributed(story: str, answer: str) -> list[str]:
             if (not mine or squash(article) not in flat
                     or (len(same) > 1 and squash(law) not in flat) or any(w in sentence for w in mine)):
                 continue
+            # 그 행의 말이 없다는 것만으로는 부족하다(공통어로만 쓴 맞는 문장) — 다른 행에만 있는 말을 담았을 때 어긋난 것
+            others = [w for o in only if o is not mine for w in o]
+            if not any(w in sentence for w in others):
+                continue
             # 같은 조문 문자열이 더 긴 다른 조문의 일부일 뿐인 경우(제2호 ⊂ 제2호가목)는 그 긴 조문 행이 맡는다
             if any(squash(article) != squash(r[1]) and squash(article) in squash(r[1]) and squash(r[1]) in flat
                    for r in rows):
@@ -362,6 +373,27 @@ def misattributed(story: str, answer: str) -> list[str]:
             problems.append(settings.story_misattributed_text.format(
                 sentence=sentence[:80], article=article, row=content[:60]))
     return problems
+
+
+PART = re.compile(r"제\d+(?:항|호)|[가-하]목")
+
+
+def _in_answer(cite: str, flat: str) -> bool:
+    """이야기의 인용(공백 뺀)이 답에 있는가. 그대로 없으면 끝의 항·호·목을 하나씩 떼어, 답에 있는 상위 조문을 이야기가
+    좁혀 쓴 것인지 본다 — 답이 그 상위 조문 바로 뒤에 다른 항·호·목을 적었으면(별표 10 제2호 '사목' ↔ 이야기 '라목')
+    좁혀 쓴 것이 아니라 다른 것을 붙인 것이다."""
+    if cite in flat:
+        return True
+    parts = PART.findall(cite)
+    head = cite
+    for part in reversed(parts):
+        if not head.endswith(part):
+            break
+        head = head[: -len(part)]
+        spots = [m.end() for m in re.finditer(re.escape(head), flat)] if head else []
+        if spots:
+            return any(not PART.match(flat, i) for i in spots)
+    return False
 
 
 def beyond_answer(story: str, answer: str) -> list[str]:
@@ -373,7 +405,7 @@ def beyond_answer(story: str, answer: str) -> list[str]:
     out: list[str] = []
     for m in re.finditer(f"(?:{settings.answer_cite_pattern}){settings.story_cite_tail_pattern}", story):
         cite = m.group(0).strip()
-        if re.sub(r"\s+", "", cite) not in flat and cite not in out:
+        if not _in_answer(re.sub(r"\s+", "", cite), flat) and cite not in out:
             out.append(cite)
     return [settings.story_beyond_answer_text.format(cite=c) for c in out]
 
@@ -467,7 +499,8 @@ def unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, .
 
 
 def _law_names(messages: list[dict[str, Any]], skip: tuple[str, ...]) -> list[str]:
-    """도구 결과의 ANSWER_LAW_KEYS 값과 사용자 발화에서 ANSWER_LAW_LOOSE_PATTERN 으로 잡은 이름 — 공백 뺀 꼴."""
+    """도구 결과의 ANSWER_LAW_KEYS 값, 도구 결과 원문 안에서 ANSWER_LAW_PATTERN 으로 잡은 이름(「…」), 사용자 발화에서
+    ANSWER_LAW_LOOSE_PATTERN 으로 잡은 이름 — 공백 뺀 꼴."""
     keys = {k.strip() for k in settings.answer_law_keys.split(",") if k.strip()}
     names: list[str] = []
 
@@ -491,6 +524,9 @@ def _law_names(messages: list[dict[str, Any]], skip: tuple[str, ...]) -> list[st
                 walk(json.loads(content))
             except ValueError:
                 pass
+            if settings.answer_law_pattern:   # 원문이 인용한 다른 법령도 조회 결과에 나온 이름이다
+                names += [h if isinstance(h, str) else next((x for x in h if x), "")
+                          for h in re.findall(settings.answer_law_pattern, content)]
         elif m.get("role") == "user":
             names += re.findall(settings.answer_law_loose_pattern, content)
     return [b for b in (re.sub(r"\s+", "", n) for n in names) if b]
@@ -608,7 +644,7 @@ def ungrounded_arg(args: Mapping[str, Any], messages: list[dict[str, Any]]) -> t
 
 async def retell(model: Any, question: str, answer: str, messages: list[dict[str, Any]],
                  cite_notes: tuple[str, ...], usage_total: dict[str, int],
-                 form: str | None = None, laws: list[str] | None = None) -> str:
+                 form: str | None = None, laws: list[str] | None = None, avoid: list[str] | None = None) -> str:
     """검증을 마친 답을 STORY_PROMPT 지시로 이야기로 바꾼다 — 도구 없이 한 번만 부른다.
 
     이번 턴 조회 원문도 함께 넘긴다. STORY_PLAN_PROMPT 가 있고 조회 결과에 대조할 키가 있으면 먼저 계획을
@@ -616,11 +652,14 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
     다시 쓰게 한 뒤에도 걸리면 사실 답을 그대로 낸다. 지시문의 {법령}·{설명틀}·{설명틀_쓰는법}은 조회한
     법령명과 설명틀로 채운다 — 틀은 STORY_FORM_SELECT_PROMPT 가 있으면 검증된 답을 보고 다시 고르고,
     못 고르면 모델이 도구로 고른 것, 모르는 틀이면 일반 지시만. STORY_REVIEW_PROMPT 가 있으면 쓴 이야기를
-    답과 대조해 고칠 점이 나오면 그것을 붙여 다시 쓰게 한다.
+    답과 대조해 고칠 점이 나오면 그것을 붙여 다시 쓰게 한다. `avoid` 는 사실 답에서 확인되지 않은 인용 — STORY_UNVERIFIED_TEXT 로
+    쓰지 말라고 알린다. 이야기도 답과 같은 인용·법령명 검사를 거치므로 그 인용을 다시 쓰면 걸린다.
     """
     system = (AGENT_DIR / settings.story_prompt).read_text(encoding="utf-8").replace("{법령}", "·".join(laws or []) or "법령")
     sources = story_sources(messages)
     request = settings.story_request_text.format(question=question, answer=answer, sources=sources)
+    if avoid and settings.story_unverified_text:
+        request += settings.story_unverified_text.format(cites=", ".join(avoid))
 
     async def ask(prompt: str, user: str | None = None) -> str:
         step = await model.next_step([{"role": "system", "content": prompt},
@@ -657,7 +696,9 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
         why = ("empty" if not story else "format" if settings.story_format_pattern
                and not re.match(settings.story_format_pattern, story) else "")
         why = why or "; ".join(f"{k}={v}" for k, v in (("cites", ungrounded(story, messages, cite_notes)),
-                                                       ("pairs", mispaired(story, messages))) if v)
+                                                       ("pairs", mispaired(story, messages)),
+                                                       ("laws", unnamed_laws(story, messages, cite_notes)
+                                                        + loose_unnamed_laws(story, messages, cite_notes))) if v)
         if not why and (quotes := misquoted(story, messages, cite_notes)):
             # 원문에 없는 따옴표 인용 — 다시 써도 같은 인용을 지어내곤 한다. 따옴표만 벗겨 원문 인용으로 보이지 않게 한다
             logger.info("story: form=%s attempt=%d unquoted %s", form, attempt, quotes)
@@ -666,10 +707,15 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
             logger.info("story: form=%s attempt=%d rejected (%s): %s", form, attempt, why, story[:80].replace("\n", " "))
             continue
         # 답의 근거표와 어긋나게 붙인 조문 — 모델 점검 전에 기계로 본다(걸리면 점검을 부르지 않고 바로 다시 쓰게)
-        problems = beyond_answer(story, answer) + misattributed(story, answer)
+        # 조문-내용 짝은 오탐이 잦아(한 문장에 조문 둘·나열·바꿔 쓴 말) 점검이 있으면 의심으로 넘겨 점검이 판단한다
+        hints = misattributed(story, answer)
+        hinted = bool(review and settings.story_review_hint_text)
+        problems = beyond_answer(story, answer) + ([] if hinted else hints)
         if not problems and review:
             problems = review_problems(await ask(review, settings.story_review_request_text.format(
-                question=question, answer=answer, sources=sources, story=story)))
+                question=question, answer=answer, sources=sources, story=story)
+                + (settings.story_review_hint_text.format(hints="\n".join(f"- {h}" for h in hints))
+                   if hinted and hints else "")))
         if not problems:
             logger.info("story: form=%s laws=%s attempt=%d ok", form, laws, attempt)
             return story
@@ -1043,8 +1089,7 @@ async def run_query(
         reviewed = 0
         # 정리 단계가 예시가 필요한 질문으로 보면 요청이 없어도 이야기로 다시 쓴다. 이때는 앞 턴 조회를 다시
         # 돌리지 않는다 — 그건 앞 답을 이야기로 해 달라는 요청(retell_as_story 호출)일 때의 일이다.
-        # 이어지는 질문은 판단만으로 바꾸지 않는다 — 앞 턴이 이미 예시를 줬고, 앞 답에서 좁혀 묻는 것이라 사실 답이 필요하다
-        story_wanted = replayed = bool(story_need and settings.story_prompt and not (follow and work))
+        story_wanted = replayed = bool(story_need and settings.story_prompt)
         story_called = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
@@ -1162,20 +1207,22 @@ async def run_query(
                         cite_notes += (note,)
                         messages.append({"role": "user", "content": note})
                         continue
-                answer = drop_internal(clean_answer(step["answer"]), leaks)
+                answer = told = drop_internal(clean_answer(step["answer"]), leaks)
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
                 if not bad and settings.param_prompt:
                     say(settings.progress_params_text)
                 params = [] if bad else await extract_parameters(model, query, answer, messages, usage_total)
-                if not (bad and settings.answer_unverified_text) and story_wanted:
+                # 확인 안 된 인용이 남은 답도 이야기로 풀되, 그 인용은 쓰지 말라고 알린다(알릴 틀이 없으면 예전처럼 건너뜀)
+                if story_wanted and not (bad and settings.answer_unverified_text and not settings.story_unverified_text):
                     say(settings.progress_story_text)
-                    story = await retell(model, query, answer, messages, cite_notes, usage_total,
-                                         story_form, story_laws(tool_results))
+                    story = await retell(model, query, told, messages, cite_notes, usage_total,
+                                         story_form, story_laws(tool_results), bad)
                     # 덧붙이는 틀이 있으면 사실 답은 그대로 두고 이야기를 아래에 붙인다(이야기가 사실 답이 되지 않게)
-                    answer = (settings.story_append_format.format(answer=answer, story=story)
-                              if settings.story_append_format and story != answer else story)
+                    if story != told:
+                        answer = (settings.story_append_format.format(answer=answer, story=story)
+                                  if settings.story_append_format else story)
                 return done("answer", answer=answer, ungrounded=bad, parameters=params)
 
             calls = _tool_calls_from_step(step)
