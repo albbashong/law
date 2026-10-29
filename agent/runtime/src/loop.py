@@ -833,6 +833,10 @@ def with_focus(query: str, context: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+# 번지 — 지명 뒤의 숫자(-숫자)로, 뒤에 단위(원·%·㎡·년 …)가 아니라 띄어쓰기·끝·조사·"번지"가 온다
+ADDRESS_NUMBER = r"\s+\d+(?:-\d+)?(?:번지)?(?=$|\s|[,.?!)]|(?:에|의|은|는|이|가|을|를|도)(?![가-힣]))"
+
+
 async def restated(model: Any, text: str, usage_total: dict[str, int],
                    tools: list[dict[str, Any]] | None = None) -> tuple[str, list[str], bool, bool, str]:
     """RESTATE_PROMPT 로 발화를 정리한 줄들(중립 질문 + 짐작) — 도구 없이 한 번 부른다.
@@ -885,8 +889,11 @@ async def restated(model: Any, text: str, usage_total: dict[str, int],
     if presumption:
         lines.append(settings.restate_presumption_line.format(presumption=presumption))
     raw_terms = data.get(settings.restate_terms_key) or []
+    # 주소의 일부는 법령 용어가 아니다 — 숫자가 든 말(번지)과 발화에서 바로 뒤에 숫자가 오는 말(번지 앞 지명)은 뺀다
     terms = list(dict.fromkeys(t.strip() for t in (raw_terms if isinstance(raw_terms, list) else [raw_terms])
-                               if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_text))
+                               if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_text
+                               and not re.search(r"\d", t)
+                               and not re.search(re.escape(t.strip()) + ADDRESS_NUMBER, text)))
     logger.info("restate: %s | %s | terms=%s story=%s follow=%s lead=%s", question, presumption, terms, story, follow, lead)
     return "\n".join(lines), terms[:settings.restate_terms_max], story, follow, lead
 

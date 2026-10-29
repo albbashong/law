@@ -74,3 +74,19 @@ async def test_no_replay_without_the_key(monkeypatch, tmp_path):
     model = Model([{"answer": '{"질문": "진행 절차", "짐작": "", "이어짐": true}'}, {"answer": "답"}])
     await loop.run_query("그럼 어떻게 해", mcp=mcp, model=model, context=CONTEXT)
     assert mcp.calls == []
+
+
+async def test_address_parts_are_not_checked_as_terms(monkeypatch, tmp_path):
+    # 실측 2026-10-29: "다문리 160 최소분할면적"에서 '다문리'·'160'을 법령 용어로 확인하느라 두 번 조회했다 —
+    # 숫자가 든 말과, 발화에서 바로 뒤에 숫자(번지)가 오는 말은 주소의 일부라 확인하지 않는다(낱말 목록 없이 모양으로)
+    _on(monkeypatch, tmp_path)
+    model = Model([{"answer": '{"질문": "다문리 160 최소분할면적", "짐작": "", "확인할 말": ["다문리", "160", "254-3번지", "필지분할"]}'}])
+    _, terms, *_ = await loop.restated(model, "다문리 160 필지분할 최소면적은? 용천리 254-3번지도", {"tokens_in": 0, "tokens_out": 0})
+    assert terms == ["필지분할"]
+
+
+async def test_alias_followed_by_an_amount_is_still_checked(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    model = Model([{"answer": '{"질문": "q", "짐작": "", "확인할 말": ["김영란법"]}'}])
+    _, terms, *_ = await loop.restated(model, "김영란법 3만원 넘으면?", {"tokens_in": 0, "tokens_out": 0})
+    assert terms == ["김영란법"]
