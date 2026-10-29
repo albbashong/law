@@ -170,8 +170,8 @@ class Settings(BaseSettings):
         "든 facts 키 이름이다. 이 결과 뒤에 모델이 다시 부르지 않고 ask_user 로 고르게 하면 한 번 돌려보낸다.")
     mention_key: str = Field(default="mention", description="도구 결과에서 '답에 꼭 나와야 할 이름'(필지에 걸린 규제 등) 목록의 키. 모델에게는 보이지 않는다.")
     mention_retry_text: str = Field(
-        default="조회 결과에 나온 다음 규제가 답변에 빠졌습니다: {names}. 각 규제가 결론에 영향을 주는지 결과의 근거 조문으로 "
-        "확인해 답변에 반영하고 다시 답하세요.",
+        default="조회 결과가 답에 꼭 다루라고 표시한 다음 항목이 답변에 빠졌습니다: {names}. 조문이면 근거 표에 적고, 규제 이름이면 "
+        "결론에 영향을 주는지 결과의 근거 조문으로 확인해 답변에 반영하고 다시 답하세요.",
         description="mention 목록의 이름이 답에 없을 때 한 번 되돌리며 주는 안내. {names} 자리에 빠진 이름.")
     pick_retry_text: str = Field(
         default="아직 사용자에게 묻지 않았습니다. 앞의 {name} 결과는 사용자가 아니라 당신이 '{key}'에서 질문의 뜻에 가장 "

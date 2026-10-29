@@ -280,3 +280,13 @@ def test_citation_falls_back_to_the_name_tail():
     assert _tails("수질보전특별대책지역") == [("", "수질보전특별대책지역"), ("수질", "보전특별대책지역"),
                                        ("수질보", "전특별대책지역"), ("수질보전", "특별대책지역"),
                                        ("수질보전특", "별대책지역"), ("수질보전특별", "대책지역")]
+
+
+def test_regulation_names_keep_the_deciding_articles_of_building_basis(store):
+    # 건축 근거 결과의 판단근거 표시(mention)에 규제 이름을 더한다 — 덮어쓰면 판단 근거가 답에서 빠져도 모른다
+    from law_mcp.tools.building_basis import run_building_basis
+    from law_mcp.tools.parcel import with_regulations
+    r = with_regulations(store, run_building_basis(store, "단독주택", address="x",
+                                                   parcel_lookup=_lookup_with_others(["성장관리계획구역"])))
+    assert "성장관리계획구역" in r["mention"]
+    assert any(m.startswith("제71조") or m.startswith("별표") for m in r["mention"])

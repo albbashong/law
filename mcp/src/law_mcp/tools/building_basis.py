@@ -245,11 +245,11 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     for it in e_hits[:4]:
         refs.append(_item_ref(store, enf["doc_id"], zm["annex_no"], it, section_kind(header_of(e_items, it))))
         if part(it):
-            conditions.append(f"시행령 별표 {zm['annex_no']} {it['label']}: {excerpt(first(it), 160)}")
+            conditions.append(f"{ENF} 별표 {zm['annex_no']} {it['label']}: {excerpt(first(it), 160)}")
     head = header_of(e_items, e_hits[0]) if e_hits else (e_items[0]["text"].split("\n")[0] if e_items else "")
     m = re.search(r"(\d+)층\s*이하", head)
     if m:
-        conditions.append(f"{m.group(1)}층 이하 (시행령 별표 {zm['annex_no']})")
+        conditions.append(f"{m.group(1)}층 이하 ({ENF} 별표 {zm['annex_no']})")
 
     # 2) 조례의 건축제한 목록(별표 또는 본문 조문) — 시행령이 조례에 맡긴 구분이 하나라도 있으면 확인
     o_src, o_items = _ordinance_source(store, plan_id, zkey)
@@ -302,6 +302,11 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     if o_src and not (by_kind["조례허용"] or by_kind["조례제한"]):
         conditions.append(f"{o_src}의 용도지역 건축제한도 함께 확인")
 
+    # 판단 근거 — 열거한 별표·조례 항목과 그것을 맡긴 바로 윗 조문. 답에 꼭 적을 항목(mention)으로 표시한다
+    deciding = list(refs)
+    for r in refs:
+        deciding += [u for u in follow(store, r.doc_id, r.path, plan_id, "up", 1).refs[1:] if u.law == r.law]
+
     # 3) 상위 체인: 시행령 별표 → 제71조 → 법 제76조, 조례 항목 → 시행령
     chain = []
     for r in list(refs):
@@ -352,7 +357,11 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
             continue
         seen.add((r.doc_id, r.path))
         ordered.append(r)
+    if not deciding:
+        deciding = refs[:1]
+    basis = list(dict.fromkeys(f"{r.law} {r.article}" for r in deciding))[:4]
     facts = {"시군구": reg["org"], "용도지역": zkey, "건축물용도": f"{uname}(건축법 시행령 별표 1 제{ho}호)",
+             "판단근거": basis,
              "건축물용도_원문": f"건축법 시행령 별표 1 {uses[0]['label']}: {excerpt(uses[0]['text'], 200)}",
              "근거상태": verdict, "근거상태_설명": EXPLAIN[verdict], "조건": conditions[:8], "건폐율": ratios["건폐율"], "용적률": ratios["용적률"],
              "추가검토": extra}
@@ -369,10 +378,12 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     fit(facts, s.facts_max_chars)
     msg = EXPLAIN[verdict]
     msg += " 근거상태는 법령 열거 여부이며 최종 허가 판단이 아닙니다. 조건과 추가검토를 함께 안내하세요."
+    msg += " 판단근거의 조문은 이 판단을 정한 조문이니 답의 근거 표에 적으세요."
     if not land_category:
         msg += (" 질문에 토지의 종류(지목)가 나왔다면 지목의 법정 명칭을 land_category 에 넣어 다시 부르세요"
                 " — 그 지목의 전용허가 근거가 붙습니다.")
-    return result(status, facts, msg)
+    marked = list(dict.fromkeys(r.article for r in deciding))[:4]
+    return {s.mention_key: marked, **result(status, facts, msg)}
 
 
 def run_zone_ratios(store, region: str | None = None, zone: str | None = None, address: str | None = None,

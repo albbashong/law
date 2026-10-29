@@ -238,3 +238,21 @@ def test_use_without_place_lists_the_zones_that_allow_it(store):
     by = r["facts"]["용도지역별_허용"]
     assert "일반공업지역" in by["시행령_허용"] and "제1종전용주거지역" not in by["시행령_허용"], by
     assert "시군구" in r["message"] or "주소" in r["message"]
+
+
+def test_conditions_name_the_decree_in_full(store):
+    # 실측 2026-10-29 부산 카페: 조건이 "4층 이하 (시행령 별표 4)"로만 나와, 모델이 옆에 있던 건축법 시행령에 붙였다
+    r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역")
+    floors = [c for c in r["facts"]["조건"] if "층 이하" in c]
+    assert floors and all("국토의 계획 및 이용에 관한 법률 시행령 별표" in c for c in floors)
+
+
+def test_deciding_articles_are_marked_for_the_answer(store):
+    # 실측 2026-10-29 부산 카페: 결과 맨 앞의 별표 4 제1호 다목·제71조제1항제3호(허용 근거)를 답이 빼먹었다 —
+    # 판단 근거(별표 항목과 그것을 맡긴 조문)를 답에 꼭 적을 항목(mention)으로 표시한다
+    from law_mcp.config import get_settings
+    r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역")
+    marked = r[get_settings().mention_key]
+    assert any(m.startswith("별표 17 ") for m in marked)
+    assert any(m.startswith("제71조") for m in marked)
+    assert r["facts"]["판단근거"] and all(" " in x for x in r["facts"]["판단근거"])

@@ -68,7 +68,8 @@ def with_regulations(store, res: dict) -> dict:
     if not named:
         return res
     p["규제_근거"], p["규제_안내"] = rows, REGULATION_NOTE
-    return {get_settings().mention_key: named, **res}
+    key = get_settings().mention_key
+    return {**res, key: list(dict.fromkeys([*(res.get(key) or []), *named]))}
 
 
 def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
