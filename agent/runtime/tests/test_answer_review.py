@@ -73,3 +73,35 @@ def test_review_scope_skips_first_turn_answers_built_on_a_domain_tool(monkeypatc
     assert loop.review_wanted(False, article)
     monkeypatch.setattr(settings, "answer_review_scope", "all")
     assert loop.review_wanted(False, basis)
+
+
+async def test_answer_with_unverified_cites_is_still_reviewed(monkeypatch, tmp_path):
+    # 실측 2026-10-28 파주 아파트: 인용 경고가 걸린 답은 점검을 건너뛰어, 의제를 거꾸로 쓴 문장·적용 제외 조문 오용이
+    # 그대로 나갔다 — 인용 되돌림 뒤에도 걸린 답을 점검한다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([LOOKUP, {"answer": "제99조에 따라 예외에 해당합니다."},
+                   {"answer": "제99조에 따라 예외에 해당합니다."},
+                   {"answer": '{"문제": ["허가권자가 인정해야 하는 예외를 해당한다고 단정"]}'},
+                   {"answer": "제44조의 예외는 허가권자가 인정할 때만 적용됩니다."}])
+    raw = await loop.run_query("내부 통로가 있으면 돼?", mcp=Mcp(), model=model)
+    assert raw["answer"].startswith("제44조의 예외는 허가권자가 인정할 때만")
+
+
+async def test_corrected_answer_is_reviewed_again_up_to_the_limit(monkeypatch, tmp_path):
+    # 실측 2026-10-29 W7: 지목된 문장을 고치며 다른 조문(제51조)의 허가 필요 여부를 거꾸로 써 넣었다 — 고친 답도 다시 점검한다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_review_max", 2)
+    model = Model([LOOKUP, {"answer": "답1"}, {"answer": '{"문제": ["A 거꾸로"]}'},
+                   {"answer": "답2"}, {"answer": '{"문제": ["B 거꾸로"]}'},
+                   {"answer": "답3"}])
+    raw = await loop.run_query("q", mcp=Mcp(), model=model)
+    assert raw["answer"] == "답3" and "B 거꾸로" in model.seen[5][-1]["content"]
+
+
+async def test_second_review_passing_keeps_the_corrected_answer(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_review_max", 2)
+    model = Model([LOOKUP, {"answer": "답1"}, {"answer": '{"문제": ["A"]}'}, {"answer": "답2"}, {"answer": '{"문제": []}'}])
+    raw = await loop.run_query("q", mcp=Mcp(), model=model)
+    assert raw["answer"] == "답2" and len(model.seen) == 5

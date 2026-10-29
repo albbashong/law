@@ -82,3 +82,38 @@ def test_match_use_by_a_later_enumerated_facility_and_late_mok_letter(store):
     hit = match_use(store, "노래연습장")[0]
     assert hit["ho"] == "4" and hit["label"].endswith("러목") and hit["term"] == "노래연습장"
     assert match_use(store, "제4호러목")[0]["label"].endswith("러목")
+
+
+def test_use_whose_approval_title_does_not_name_it_is_found_by_the_scale_list(store):
+    # 실측 2026-10-28 파주 아파트: 주택법의 승인 조문 제목은 "사업계획의 승인"이라 "공동주택"이 없다 — 시행령의 승인 조문이
+    # "2. 공동주택: 30세대"처럼 그 말로 승인 대상 규모를 나누므로, 그 조문이 위임받은 법률 조문을 고른다
+    from law_mcp.engine.permits import permits_for_term
+    got = [(r.law, r.article) for r in permits_for_term(store, ["공동주택"])]
+    assert ("주택법", "제15조") in got, got
+
+
+def test_scale_item_is_given_with_the_approval_article(store):
+    # 승인 대상이 되는 규모("공동주택: 30세대")가 답에 보이게 그 호를 함께 준다
+    from law_mcp.engine.permits import permits_for_term
+    refs = permits_for_term(store, ["공동주택"])
+    assert any(r.law == "주택법 시행령" and "공동주택" in r.excerpt and "30" in r.excerpt for r in refs), \
+        [(r.law, r.article, r.excerpt[:60]) for r in refs]
+
+
+def test_road_rule_of_the_decree_is_the_paragraph_the_act_delegates(store):
+    # 실측 파주 아파트: 시행령 제28조 발췌가 ①(공지)에서 잘려 ②(연면적 2천㎡ 이상은 6m 도로에 4m)를 못 봤다 —
+    # 법 제44조에서 대통령령에 맡긴 항을 인용하는 시행령의 항을 준다
+    from law_mcp.engine.permits import road_access
+    dec = [r for r in road_access(store) if r.law == "건축법 시행령"]
+    # 조 전체를 주면 결과에 담을 때 앞(①)만 남는다 — 그 항 자체를 준다
+    assert dec and dec[0].article.endswith("제2항") and "6미터" in dec[0].excerpt[:200], \
+        [(r.article, r.excerpt[:80]) for r in dec]
+
+
+def test_approval_comes_with_the_article_deeming_other_permits(store):
+    # 실측 파주 아파트: 사업계획승인 뒤에 건축허가를 따로 받는다고 답했다 — 승인을 받으면 다른 인허가를 받은 것으로
+    # 보는 같은 법의 조문(주택법 제19조①)을 함께 준다
+    from law_mcp.engine.permits import deeming_of, permits_for_term
+    approval = next(r for r in permits_for_term(store, ["공동주택"]) if r.law == "주택법")
+    got = deeming_of(store, approval)
+    assert got and got.article.startswith("제19조"), got

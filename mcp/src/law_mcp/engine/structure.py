@@ -50,13 +50,17 @@ def structure(store, doc_id: int, path: str) -> list[dict]:
 
 
 LEAD_CHARS = 300   # 딸린 문장 한 줄 길이 상한 — 요건은 대개 문장 앞부분에 있다
+AMENDED = re.compile(r"\s*<(?:개정|신설|전문개정|본조신설|타법개정)[^>]*>")
+TITLE_LINE = re.compile(r"^\s*제\s*\d+\s*조(?:의\s*\d+)?\s*\([^)]*\)\s*")
 
 
 def leads(store, doc_id: int, path: str, focus: str | None = None) -> list[str]:
     """path 의 호·목이 딸린 상위 항·호의 문장들(위에서 아래로) — "제84조제1항: ①…".
 
     focus 가 있으면(조 전체가 걸린 검색 결과) path 아래에서 그 낱말이 든 가장 깊은 조항을 기준으로 삼는다.
-    조문 자신(제목 줄)은 넣지 않는다 — 요건은 항·호의 문장에 있다.
+    조문 자신(제목 줄)은 넣지 않는다 — 요건은 항·호의 문장에 있다. 다만 항 없이 조 본문이 목록을 여는 조(제목 뒤에
+    곧바로 "…란 다음 각 호의 행위를 말한다")는 그 본문 첫머리를 넣는다 — 빠지면 그 아래 호·목이 무엇의 목록(허가
+    대상인지, 허가 없이 되는 것인지)인지 모른다(실측 2026-10-29 국토계획법 시행령 제53조). 개정 표시는 뺀다.
     """
     target = path
     if focus:
@@ -68,13 +72,15 @@ def leads(store, doc_id: int, path: str, focus: str | None = None) -> list[str]:
     cur = store.unit(doc_id, target)
     while cur and cur["parent_path"]:
         parent = cur["parent_path"]
-        if parent.endswith("/-"):          # 항 번호 없는 조문 — 호의 부모는 조문 자신
-            break
-        if "/" not in parent:              # 조문까지 올라왔다
+        if parent.endswith("/-") or "/" not in parent:   # 조문까지 올라왔다(항 번호 없는 조문은 호의 부모가 조문 자신)
+            art = store.unit(doc_id, parent.split("/")[0])
+            body = AMENDED.sub("", TITLE_LINE.sub("", (art["text"] or "").split(chr(10))[0]) if art else "").strip()
+            if body:
+                out.append(f"{art['label']}: {excerpt(body, LEAD_CHARS)}")
             break
         p = store.unit(doc_id, parent)
         if not p:
             break
-        out.append(f"{p['label']}: {excerpt((p['text'] or '').split(chr(10))[0], LEAD_CHARS)}")
+        out.append(f"{p['label']}: {excerpt(AMENDED.sub('', (p['text'] or '').split(chr(10))[0]).strip(), LEAD_CHARS)}")
         cur = p
     return out[::-1]

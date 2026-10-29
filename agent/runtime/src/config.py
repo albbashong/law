@@ -191,6 +191,22 @@ class Settings(BaseSettings):
         description="질문 정리 JSON 에서 '예시가 필요한 질문' 판단(참/거짓)을 읽을 키. 참이면 STORY_PROMPT 로 "
         "검증된 답을 이야기로 다시 쓴다(사용자가 예시를 달라고 하지 않아도). 비우면 쓰지 않는다.",
     )
+    restate_follow_key: str = Field(
+        default="",
+        description="질문 정리 JSON 에서 '앞 질문의 대상을 생략한 이어지는 질문' 판단(참/거짓)을 읽을 키. 참이고 작업 기억이 "
+        "있으면 앞 턴의 조회를 먼저 다시 실행해 근거를 놓는다. 비우면 쓰지 않는다.")
+    restate_tool_key: str = Field(
+        default="",
+        description="질문 정리 JSON 에서 '이 질문에 가장 먼저 부를 도구' 이름을 읽을 키. 채우면 정리 단계에 도구 목록(이름과 설명 "
+        "첫 줄)을 보이고, 고른 도구가 목록에 있으면 첫 라운드는 그 도구 하나만 주고 꼭 부르게 한다. 비우면 쓰지 않는다.")
+    restate_lead_tools: str = Field(
+        default="", description="질문 정리 단계에 보일(먼저 부르게 할 수 있는) 도구 이름(쉼표 구분). 비우면 MCP 도구 전부. "
+        "조문 번호처럼 정확한 식별자가 있어야 하는 도구를 빼 두면, 기억으로 번호를 지어 부르게 강제하지 않는다.")
+    restate_tool_line: str = Field(
+        default="[도구] {name}: {description}", description="질문 정리 단계에 보일 도구 목록의 한 줄.")
+    restate_prior_line: str = Field(
+        default="[앞 질문] {question}",
+        description="질문 정리 단계에 작업 기억의 마지막 질문을 함께 보일 때의 줄 — 이어지는 질문의 생략된 대상을 채우게.")
     restate_terms_key: str = Field(default="확인할 말", description="질문 정리 JSON 에서 확인할 일상어·별칭 목록을 읽을 키.")
     restate_term_tool: str = Field(
         default="", description="확인할 말을 법령 용어·법령명에 잇는 도구 이름(예: term_link). 비우거나 도구 목록에 없으면 묻지 않는다.")
@@ -213,14 +229,22 @@ class Settings(BaseSettings):
     answer_review_scope: str = Field(
         default="follow_up_or_general", description="점검할 답. all: 모든 답. follow_up_or_general: 이어지는 질문의 답과 "
         "분야 도구(분야 지침의 '도구:')를 부르지 않은 답만 — 분야 도구가 근거를 짜 준 첫 턴 답은 점검하지 않는다.")
+    answer_review_max: int = Field(
+        default=1, description="한 답을 점검하는 횟수 상한. 2 이상이면 고친 답도 다시 점검한다 — 지목된 문장을 고치며 다른 "
+        "문장을 새로 틀리게 쓰는 일이 있어서다(실측 2026-10-29). 점검마다 모델 호출 한 번이 는다.")
     answer_review_key: str = Field(default="문제", description="점검 답 JSON 에서 고칠 점 목록의 키.")
     answer_review_request_text: str = Field(
         default="[질문]\n{question}\n\n[답]\n{answer}\n\n[조회 원문]\n{sources}",
         description="답 점검에 넘기는 사용자 메시지 틀.")
+    answer_review_hint_text: str = Field(
+        default="\n\n[기계 대조가 의심한 조건] 아래 문장은 같은 수치의 원문 조건과 방향(이상·이하·미만·초과)이나 효과(할 수 "
+        "있다·없다)가 반대로 읽혔습니다. 기계 대조는 틀릴 수 있으니, 원문과 대조해 실제로 반대인 것만 문제로 적으세요.\n{conds}",
+        description="조건 대조(ANSWER_CONDITION_CHECK)에 걸린 문장을 답 점검 요청에 붙이는 틀. 점검이 켜져 있으면 걸린 문장은 "
+        "곧바로 되돌리지 않고 점검이 원문과 대조해 판단한다(기계 대조의 오탐이 옳은 문장을 고치게 하지 않으려고).")
     answer_review_retry_text: str = Field(
-        default="답을 조회 원문과 대조했더니 다음 문제가 있었습니다. 원문 근거로 고쳐 처음부터 다시 답하세요(필요하면 더 "
-        "조회). 고칠 점과 관계없는 근거 조문 인용은 그대로 둡니다. 점검이 있었다는 말이나 앞 답과 "
-        "달라진 점은 답에 쓰지 않습니다.\n{problems}",
+        default="답을 조회 원문과 대조했더니 다음 문장에 문제가 있었습니다. 지목된 문장만 원문 근거로 고치고(필요하면 더 "
+        "조회), 나머지 문장·표·인용은 앞 답 그대로 둔 채 전체 답을 다시 쓰세요. 고치면서 새 내용을 보태지 않습니다. "
+        "점검이 있었다는 말이나 앞 답과 달라진 점은 답에 쓰지 않습니다.\n{problems}",
         description="점검에서 나온 고칠 점을 모델에 되돌리는 문장.")
 
     # ── 도구 인자 검증. 어느 인자가 "사용자가 말한 값"이어야 하는지는 에이전트 영역이라 설정이 정한다.
@@ -230,6 +254,13 @@ class Settings(BaseSettings):
         default="답변의 다음 비율 수치는 조회한 원문의 어떤 값과도 맞지 않습니다: {rates}. 원문 표기(예: 1천분의 2.5)대로 "
         "쓰거나 정확히 환산해(1천분의 2.5 = 0.25%) 다시 답하세요.",
         description="비율 수치가 맞지 않을 때 모델에게 되돌리는 문장.")
+    answer_condition_check: bool = Field(
+        default=False, description="답의 조건(수치·단위·비교어)을 조회 원문의 같은 값 조건과 조건식(방향 × 효과)으로 대조해, "
+        "어느 원문과도 반대인 것을 되돌린다. 같은 값에 원문끼리 부호가 엇갈리면 판단하지 않는다.")
+    answer_condition_retry_text: str = Field(
+        default="답의 다음 조건은 조회 원문과 방향(이상·이하·미만·초과)이나 효과(할 수 있다·없다)가 반대입니다: {conds}. "
+        "원문의 비교어와 효과를 그대로 따라 그 문장만 고쳐 다시 답하세요.",
+        description="조건 방향이 원문과 반대일 때 모델에게 되돌리는 문장.")
     arg_grounded_keys: str = Field(
         default="",
         description="값이 사용자 발화·도구 결과에 나온 것이어야 하는 인자 이름(쉼표 구분, 예: address,region). "
@@ -315,6 +346,18 @@ class Settings(BaseSettings):
         default="", description="계획 JSON 에서 값이 조회 원문에 그대로 있어야 하는 키(쉼표 구분).")
     story_plan_text: str = Field(
         default="\n\n[이야기 계획]\n{plan}", description="대조를 통과한 계획을 이야기 요청 뒤에 붙이는 틀.")
+    story_append_format: str = Field(
+        default="", description="이야기를 사실 답 아래에 덧붙이는 틀({answer}, {story}). 비우면 이야기가 사실 답을 대신한다. "
+        "덧붙이면 이야기가 틀려도 사실 답은 남는다.")
+    story_misattributed_text: str = Field(
+        default="'{sentence}' → {article} 은 답의 근거표에서 '{row}' 행의 조문입니다. 이 문장의 내용과 맞는 조문을 붙이세요.",
+        description="이야기 문장이 붙인 조문이 답의 근거표에서 다른 내용의 행일 때, 다시 쓰게 하며 알려 주는 말.")
+    story_cite_tail_pattern: str = Field(
+        default=r"(?:\s*제\s*\d+\s*(?:항|호))*(?:\s*[가-하]\s*목)?",
+        description="이야기의 인용(ANSWER_CITE_PATTERN) 뒤에 이어지는 항·호·목. 이것까지 붙인 인용이 사실 답에 있어야 한다.")
+    story_beyond_answer_text: str = Field(
+        default="{cite} 는 답에 나오지 않는 조문입니다. 답에 나온 조문만 쓰세요.",
+        description="이야기가 사실 답에 없는 조문(항·호·목까지)을 붙였을 때 다시 쓰게 하며 알려 주는 말.")
     story_attempts: int = Field(
         default=2, description="이야기가 비었거나 형식·인용 검증에 걸리면 다시 쓰게 하는 총 횟수. 모두 걸리면 사실 답.")
     story_ack_text: str = Field(

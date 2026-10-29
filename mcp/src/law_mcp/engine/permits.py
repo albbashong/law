@@ -7,7 +7,7 @@
 """
 import re
 
-from law_mcp.engine.follow import Ref, family, node
+from law_mcp.engine.follow import DEEM, Ref, family, node, rank
 from law_mcp.store.db import nospace
 
 PLAN_LAW = family("국토의 계획 및 이용에 관한 법률 시행령")
@@ -16,6 +16,7 @@ BUILDING_LAW = family("건축법 시행령")
 ROAD_TITLE, EXEMPT_TITLE = "대지와 도로의 관계", "적용 제외"
 DEF = re.compile(r"[“\"]([^”\"]{1,30})[”\"]\s*(?:이)?(?:란|이란|라\s*함은|이라\s*함은|라고\s*함은|이라고\s*함은)")
 GRANT = re.compile(r"허가|승인")
+DELEGATE = re.compile(r"대통령령으로\s*정")   # 위임 문구(법률 용어)
 # 제2조 밖의 정의: "… 행위(이하 "개발행위"라 한다)"
 ABBR = re.compile(r"이하\s*[“\"]([^”\"]{1,20})[”\"]\s*(?:이)?라\s*한다")
 _defs: dict = {}
@@ -83,10 +84,46 @@ def permits_for_term(store, terms, must: tuple = ()) -> list[Ref]:
             grant = [a for a in titled if GRANT.search(a["title"] or "") and all(x in a["title"] for x in must)]
             if grant and (best is None or len(titled) > best[0]):
                 best = (len(titled), doc_id, grant[0]["path"])
+        if not best and not must:
+            best = _grant_by_scale(store, t, docs)
         if best:     # 그 말을 정의하는 법률이 여럿이면 그 말을 제목에 가장 많이 쓰는 법률(특례법 잡음 제외)
             found.append(best)
             seen_docs.add(best[1])
-    return [r for r in (node(store, d, p) for _, d, p in found[:2]) if r]
+    pairs = [(b[1], b[2]) for b in found[:2]] + [b[3] for b in found[:2] if len(b) > 3]
+    return [r for r in (node(store, d, p) for d, p in pairs) if r]
+
+
+def _grant_by_scale(store, term: str, docs) -> tuple | None:
+    """승인 조문 제목에 그 말이 없을 때 — 그 말을 정의한 법률의 하위 법령에서, 승인 대상 규모를 그 말로 나눠 정한
+    승인·허가 조문("2. 공동주택: 30세대")을 찾아 그 조문이 위임받은 법률 조문을 고른다(주택법 시행령 제27조 → 법 제15조)."""
+    item = re.compile(rf"(^|\n)\s*\d+\.\s*{re.escape(term)}\s*[:：]")
+    laws = store._all("SELECT doc_id, name, kind FROM doc WHERE source='law'")
+    for doc_id in sorted(docs):
+        top = store.doc(doc_id)
+        lower = [d for d in laws if family(d["name"]) == family(top["name"]) and rank(d["kind"]) > rank(top["kind"])]
+        for d in sorted(lower, key=lambda d: rank(d["kind"])):
+            for a in store._all("SELECT path, title FROM unit WHERE doc_id=? AND path NOT LIKE '%/%' ORDER BY unit_id",
+                                (d["doc_id"],)):
+                if not GRANT.search(a["title"] or ""):
+                    continue
+                hit = next((u for u in store.units_with_prefix(d["doc_id"], a["path"])
+                            if u["path"] != a["path"] and item.search(u["text"] or "")), None)
+                if not hit:
+                    continue
+                up = [l["to_path"] for l in store.links_from_prefix(d["doc_id"], a["path"]) if l["to_doc"] == doc_id]
+                if up:   # 법률 조문과 함께 규모 기준을 정한 하위 조문도 — 대상이 되는 규모가 답에 보이게
+                    return (0, doc_id, up[0].split("/", 1)[0], (d["doc_id"], hit["path"]))
+                return (0, d["doc_id"], a["path"])
+    return None
+
+
+def deeming_of(store, permit: Ref) -> Ref | None:
+    """그 허가·승인을 받으면 다른 인허가를 받은 것으로 본다고 정한 같은 법의 항(주택법 제15조 → 제19조①)."""
+    for l in store.links_to_prefix(permit.doc_id, permit.path, from_doc=permit.doc_id):
+        u = store.unit(permit.doc_id, l["from_path"] or "")
+        if u and "/" in l["from_path"] and DEEM.search((u["text"] or "").split("\n", 1)[0]):
+            return node(store, permit.doc_id, l["from_path"])
+    return None
 
 
 def land_permits(store, land_category: str | None) -> list[Ref]:
@@ -134,5 +171,16 @@ def road_access(store) -> list[Ref]:
             if re.search(re.escape(key) + r"(?!\d|의\d)", nospace(u["text"] or "")):
                 exempt = node(store, exempt.doc_id, u["path"]) or exempt
                 break
-    found = [road, titled(store, f"{BUILDING_LAW} 시행령", ROAD_TITLE), exempt]
+    decree = titled(store, f"{BUILDING_LAW} 시행령", ROAD_TITLE)
+    if road and decree:   # 법률이 대통령령에 맡긴 항(도로 너비·접하는 길이)을 인용하는 시행령의 항 — 조 전체는 앞 항만 담긴다
+        given = [u["path"] for u in store.units_with_prefix(road.doc_id, road.path)
+                 if u["path"].count("/") == 1 and DELEGATE.search(u["text"] or "")]
+        keys = [nospace(node(store, road.doc_id, p).article) for p in given]
+        for u in store._all("SELECT path, text FROM unit WHERE doc_id=? AND path GLOB ? ORDER BY unit_id",
+                            (decree.doc_id, decree.path + "/*")):
+            if u["path"].count("/") == 1 and any(re.search(re.escape(k) + r"(?!\d|제\d+호)", nospace(u["text"] or ""))
+                                                  for k in keys):
+                decree = node(store, decree.doc_id, u["path"]) or decree
+                break
+    found = [road, decree, exempt]
     return [r for r in found if r]

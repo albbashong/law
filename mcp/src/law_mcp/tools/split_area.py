@@ -11,8 +11,9 @@ from pydantic import Field
 from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.follow import DELEGATION_HINT, family, node, rank
-from law_mcp.engine.permits import development_permit
+from law_mcp.engine.permits import definitions, development_permit
 from law_mcp.engine.rules import normalize_zone
+from law_mcp.engine.structure import leads
 from law_mcp.tools.article import resolve_region
 from law_mcp.tools.common import READ_ONLY, result, trace
 from law_mcp.tools.parcel import with_regulations
@@ -20,6 +21,7 @@ from law_mcp.tools.parcel import with_regulations
 ACT = "건축법"
 RULE_TITLE = re.compile(r"분할\s*제한")                        # 조 제목의 법률 용어
 RULE_WORD = r"분할"                                            # 토지분할(법률 용어)
+NO_SPLIT = re.compile(r"분할(?:하여서는|할\s*수)\s*(?:없|아니)")    # 분할 금지 문구(법률 문체)
 ITEM = re.compile(r"^\s*\d+\.\s*(.+?)\s*[:：]\s*(.+?)\s*$", re.S)   # "1. 주거지역: 60제곱미터"
 
 
@@ -93,12 +95,15 @@ def _pick(items, zone, zone_names) -> dict | None:
 
 def _heading(store, doc_id, path) -> str:
     """항·호·목이 딸린 윗단의 첫머리 — 목 하나만 보면 그 목록이 무엇의 목록(허가 대상인지 예외인지)인지 모른다."""
-    parts, out = path.split("/"), []
-    for i in range(2, len(parts)):
-        u = store.unit(doc_id, "/".join(parts[:i]))
-        if u and u["text"]:
-            out.append(excerpt(u["text"].split("\n", 1)[0], 80))
-    return "".join(f"{x} › " for x in out)
+    return "".join(f"{x} › " for x in leads(store, doc_id, path))
+
+
+def _criterion(store, r, doc_id, path, text, zone=None) -> dict:
+    """토지분할 허가기준 한 항목 — 조문·제목, 그 항목이 딸린 윗단의 문장(딸린_문장), 항목 본문(해당)을 칸으로 나눠
+    준다. 한 줄로 이어 주면 목록의 성격(허가 대상/허가 없이 됨)과 단서(…는 제외한다)를 섞어 거꾸로 읽는다(실측 W7)."""
+    item = {"조문": f"{r.law} {r.article}", "제목": r.title, "딸린_문장": leads(store, doc_id, path),
+            "해당": excerpt(text or "", 160)}
+    return {**item, "용도지역": zone} if zone else item
 
 
 def _zone_lines(units, zone) -> list[dict]:
@@ -107,12 +112,29 @@ def _zone_lines(units, zone) -> list[dict]:
     return [u for u in units if any(n in z for n in re.findall(r"[가-힣]+?지역", _bare((u["text"] or "").split("\n", 1)[0])))]
 
 
+def _land_split_rules(store, land: str) -> list[tuple[int, str]]:
+    """지목(답·임야 등)이나 땅의 법령 용어(농지·산지 등)를 정의하는 법률에서 분할을 금지하는 항 [(doc_id, path)].
+    지목은 정의 본문에 '지목'과 그 지목이 함께 나오는 용어("농지": 전·답·과수원)로 법률을 찾는다."""
+    key = _bare(land)
+    tok = re.compile(rf"(?<![가-힣]){re.escape(land.strip())}(?![가-힣])")
+    docs = {d["doc_id"] for d in definitions(store) if d["kind"] == "정의"
+            and (d["term"] == key or ("지목" in d["text"] and tok.search(d["text"])))}
+    out, seen = [], set()
+    for doc_id in sorted(docs):
+        for u in store._all("SELECT path, text FROM unit WHERE doc_id=? AND path LIKE '%/%' ORDER BY unit_id", (doc_id,)):
+            jo = _jo(u["path"])
+            if (doc_id, jo) not in seen and NO_SPLIT.search(u["text"] or ""):
+                seen.add((doc_id, jo))
+                out.append((doc_id, u["path"]))
+    return out
+
+
 def _label(store, doc_id, item) -> str:
     return f"{store.doc(doc_id)['name']} {item['label']}"
 
 
 def run_split_area(store, region: str | None = None, zone: str | None = None, address: str | None = None,
-                   parcel_lookup=None) -> dict:
+                   parcel_lookup=None, land_category: str | None = None) -> dict:
     s = get_settings()
     parcel_facts, zones = None, [zone] if zone else []
     if address:
@@ -121,6 +143,7 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
         if pr["status"] != "ok":
             return pr
         parcel_facts = pr["facts"]
+        land_category = land_category or parcel_facts.get("지목")
         region = region or f"{parcel_facts.get('시도') or ''} {parcel_facts['시군구'] or ''}".strip()
         if not zone:   # 브이월드 '…지역'에는 대분류·규제지역도 섞여 온다 — 용도지역으로 해석되는 것만
             zones = [z for z in parcel_facts["용도지역"] if store.zone(normalize_zone(z))]
@@ -176,7 +199,7 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
             r = node(store, d, p)
             if r and re.search(RULE_WORD, r.title + r.excerpt):
                 r.note = "토지분할 허가기준"
-                criteria.append(f"{r.law} {r.article}({r.title}): {_heading(store, d, p)}{excerpt(r.excerpt, 160)}")
+                criteria.append(_criterion(store, r, d, p, r.excerpt))
                 refs.append(r)
     if reg:
         targets = [(act["doc_id"], jo)] + ([ordin] if ordin else [])
@@ -189,14 +212,24 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
             if not r or not re.search(RULE_WORD, r.title):
                 continue
             r.note = "토지분할 허가기준(조례)"
-            lines = [f"{r.law} {r.article}({r.title}): {excerpt(r.excerpt, 160)}"]
+            lines = [_criterion(store, r, d, p, r.excerpt)]
             for z in zones:   # 첫머리만으로는 어느 호가 이 용도지역의 것인지 안 보인다
                 for u in _zone_lines([u for u in store.units_with_prefix(d, p) if u["path"] != p], z):
-                    lines.append(f"{r.law} {u['label']} ({z}): {_heading(store, d, u['path'])}{excerpt(u['text'], 160)}")
+                    lines.append({**_criterion(store, r, d, u["path"], u["text"], z), "조문": f"{r.law} {u['label']}"})
                     refs.append(node(store, d, u["path"]))
-            at = len([c for c in criteria if not c.startswith(dp.law if dp else "\0")])
-            criteria[at:at] = list(dict.fromkeys(lines))
+            at = len([c for c in criteria if not c["조문"].startswith(dp.law if dp else "\0")])
+            criteria[at:at] = [x for i, x in enumerate(lines) if x not in lines[:i]]
             refs.append(r)
+    # 지목을 정하는 법률의 분할 금지 — 농지법의 농업생산기반정비사업 시행 농지 같은 것은 용도지역 기준과 따로 걸린다
+    land_rules = []
+    for d, p in (_land_split_rules(store, land_category) if land_category else []):
+        r = node(store, d, p)
+        if not r:
+            continue
+        r.note = f"지목({land_category})을 정하는 법률의 분할 제한"
+        body = " ".join(u["text"] or "" for u in store.units_with_prefix(d, p))
+        land_rules.append(f"{r.law} {r.article}({r.title}): {_heading(store, d, p)}{excerpt(body, 400)}")
+        refs.append(r)
     seen, ordered = set(), []
     for r in refs:
         if r and (r.doc_id, r.path) not in seen:
@@ -205,15 +238,22 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
 
     facts = {"시군구": reg["org"] if reg else None, "적용": f"{ACT} {node(store, act['doc_id'], jo).article}: "
              + excerpt(store.unit(act["doc_id"], jo)["text"], 160), "용도지역별": rows, "토지분할_허가기준": criteria[:6]}
+    if land_category:
+        facts["지목_분할제한"] = land_rules[:3]
     if parcel_facts:
         facts["필지"] = {k: parcel_facts[k] for k in ("주소", "pnu", "법정동", "지목", "면적", "기타규제") if k in parcel_facts}
     packed, over = pack(ordered, s.facts_max_chars - size(facts) - 300, 300)
     facts["refs"], facts["더_볼_연결"] = packed, over[:6]
     fit(facts, s.facts_max_chars)
-    msg = ("건축물이 있는 대지의 분할 제한면적입니다(적용 참고). 지목(농지·산지 등)을 정하는 법률의 분할 제한은"
-           " 이 결과에 없습니다 — 질문의 땅이 그런 지목이면 그 법률의 분할 조문을 law_search 로 따로 찾으세요.")
+    msg = "건축물이 있는 대지의 분할 제한면적입니다(적용 참고)."
+    if land_rules:
+        msg += " 지목_분할제한은 지목을 정하는 법률의 분할 제한으로, 용도지역 기준과 함께 적용될 수 있습니다(요건을 원문대로 안내)."
+    elif land_category:
+        msg += f" 지목 '{land_category}'을 정하는 법률에서는 분할을 금지하는 조문을 찾지 못했습니다."
+    else:
+        msg += " 질문의 땅이 농지·산지처럼 지목이 정해져 있으면 land_category 에 넣어 다시 부르면 그 법률의 분할 제한도 찾습니다."
     if criteria:
-        msg += (" 건축물이 없는 토지의 분할은 토지분할_허가기준을 따릅니다. 땅에 건축물이 있는지는 이 결과로 알 수 없으니,"
+        msg += (" 건축물이 없는 토지의 분할은 토지분할_허가기준을 따릅니다. 그 항목이 허가를 받아야 하는 것인지 허가 없이 되는 것인지는 딸린_문장(위에서부터 그 항목이 딸린 윗단의 문장)이 정합니다. 땅에 건축물이 있는지는 이 결과로 알 수 없으니,"
                 " 질문에서 정해지지 않으면 건축물이 있는 대지와 없는 토지로 나눠 답하세요.")
     if not reg:
         msg += " 시군구(region)나 주소(address)를 주면 조례가 정한 면적을 찾습니다 — 지금 값은 시행령의 하한입니다."
@@ -231,11 +271,14 @@ def register(mcp, get_store):
         address: Annotated[str | None, Field(description="주소·지번 (주면 용도지역을 직접 확인)")] = None,
         region: Annotated[str | None, Field(description="시군구 (예: 영천시) — address 가 없을 때")] = None,
         zone: Annotated[str | None, Field(description="용도지역 (예: 자연녹지지역) — address 가 없을 때")] = None,
+        land_category: Annotated[str | None, Field(description="지목(전·답·임야 등) 또는 땅의 법령 용어(농지·산지) — 질문에 나오면")] = None,
     ) -> dict:
         """여기 최소 분할면적 얼마야? 몇 ㎡까지 쪼갤 수 있어? — 대지 분할 제한면적을 법률→시행령→조례 위임을 따라 찾는다.
 
         건축물이 있는 대지의 분할 제한면적(조례 값, 없으면 시행령 하한)과, 건축물이 없는 토지를 분할할 때의
-        개발행위허가 기준 조례(토지분할_허가기준)를 함께 준다.
+        개발행위허가 기준 조례(토지분할_허가기준)를 함께 준다. 지목(또는 농지·산지)을 주면 그 땅을 정하는 법률의
+        분할 제한(지목_분할제한)도 준다.
         """
-        return trace("split_area", dict(region=region, zone=zone, address=address),
-                     with_regulations(get_store(), run_split_area(get_store(), region, zone, address)))
+        return trace("split_area", dict(region=region, zone=zone, address=address, land_category=land_category),
+                     with_regulations(get_store(), run_split_area(get_store(), region, zone, address,
+                                                                  land_category=land_category)))

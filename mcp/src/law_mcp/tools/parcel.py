@@ -34,7 +34,9 @@ def _conversion_refs(store, land_category):
 
 REGULATION_EXCERPT = 160
 REGULATION_NOTE = ("규제_근거의 규제는 용도지역 기준과 별도로 그 근거 법령의 행위제한이 함께 적용될 수 있습니다."
-                   " 답변에 각 규제를 적고, 결론에 영향을 주는지 근거 조문을 law_article 로 열어 확인하세요.")
+                   " 답변에 각 규제를 적고, 결론에 영향을 주는지 근거 조문을 law_article 로 열어 확인하세요."
+                   " 행위제한이 있으면 그 원문이 금지·제한하는 행위에 지으려는 것이 드는지로만 판단하고,"
+                   " 원문으로 확인되지 않으면 '해당 여부 확인 필요'로 적으세요.")
 
 
 def with_regulations(store, res: dict) -> dict:
@@ -52,9 +54,14 @@ def with_regulations(store, res: dict) -> dict:
         row = {"규제": n}
         if b:   # 첫 근거는 원문 첫머리도 — 모델이 규제의 내용을 지어내지 않고 원문으로 판단하게
             row["근거"] = [f"{x['law']} {x['article']}({x['title']})" for x in b]
+            row["법령"] = list(dict.fromkeys(x["law"] for x in b))
+            row["조문"] = [{"law": x["law"], "article": x["article"]} for x in b]
             text = b[0]["text"]
             at = text.find(base_name(n))
             row["원문"] = excerpt(text if at < 0 else "…" + text[max(0, at - 20):], REGULATION_EXCERPT)
+            rest = next((x for x in b if x.get("제한")), None)
+            if rest:   # 그 구역에서 금지·제한하는 행위 — 정의만 보고 "모든 건축 금지"로 지어내지 않게
+                row["행위제한"] = f"{rest['law']} {rest['article']}({rest['title']}): " + excerpt(rest["text"], REGULATION_EXCERPT)
         rows.append(row)
         if b:
             named.append(base_name(n))

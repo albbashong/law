@@ -211,6 +211,11 @@ def test_parcel_regulation_gets_the_article_that_designates_it(store):
     assert any("제75조의2" in b for b in rows["성장관리계획구역"]["근거"])
     assert "근거" not in rows["소로2류(폭 8m~10m)(접합)"]
     assert r["mention"] == ["성장관리계획구역"]
+    # 근거 법령 이름을 법령 칸에도 — 답이 그 법령을 쓰면 "조회되지 않은 법령"으로 걸리던 것(실측 파주 아파트)
+    assert "국토의 계획 및 이용에 관한 법률" in rows["성장관리계획구역"]["법령"]
+    # 법령·조문 짝 칸 — 답의 "법령 제N조" 짝 검사가 규제 근거를 알아보게
+    assert any(x["law"] == "국토의 계획 및 이용에 관한 법률" and x["article"] == "제75조의2"
+               for x in rows["성장관리계획구역"]["조문"])
 
 
 def test_regulation_named_by_a_common_title_word_gets_no_basis(store, monkeypatch):
@@ -229,3 +234,49 @@ def test_regulation_absent_from_titles_gets_the_article_defining_it():
     from law_mcp.engine.regulations import _defines
     assert _defines("① 산지를 다음과 같이 구분한다.\n2. 준보전산지: 보전산지 외의 산지", "준보전산지")
     assert not _defines("준보전산지에 지구단위계획구역을 지정할 수 있다", "준보전산지")
+
+
+def test_regulation_basis_is_the_article_other_laws_cite_for_it(store):
+    # 실측 2026-10-28 파주 금신초교길 53: 조 제목 일치로 고르면 "도시지역" → 국토계획법 제83조(적용 배제),
+    # "토지거래계약에 관한 허가구역" → 산업입지법(의제 조문)이 붙었다. 다른 법령이 그 이름을 쓸 때
+    # "「○○법」 제N조에 따른 이름"으로 가장 많이 인용하는 조문이 그 규제를 정한 조문이다.
+    from law_mcp.engine.regulations import _by_citation, regulation_basis
+    got = _by_citation(store, "도시지역")
+    assert got and got[0]["law"] == "국토의 계획 및 이용에 관한 법률" and got[0]["article"] in ("제6조", "제36조"), got
+    assert regulation_basis(store, "도시지역")[0]["article"] != "제83조"
+
+
+def test_citation_pattern_reads_the_borrowing_phrase():
+    from law_mcp.engine.regulations import _cited_for
+    text = ("「부동산 거래신고 등에 관한 법률」 제10조에 따른 토지거래계약에 관한 허가구역에서는 …"
+            " 「부동산 거래신고 등에 관한 법률」 제10조제1항에 따라 지정된 토지거래계약에 관한 허가구역")
+    assert _cited_for(text, "토지거래계약에 관한 허가구역") == [("부동산 거래신고 등에 관한 법률", "제10조")] * 2
+
+
+def test_restriction_article_is_found_from_the_designation_title():
+    # 실측 파주 아파트: 절대보호구역의 정의(50m)만 주자 "모든 건축행위 금지"라고 지어냈다 — 지정 조문 제목의 구역 이름
+    # (교육환경보호구역)과 행위·금지·제한이 함께 든 같은 법 조문(금지행위 조문)을 함께 준다
+    from law_mcp.engine.regulations import restriction_title_match
+    titles = [("제8조", "교육환경보호구역의 설정 등"), ("제9조", "교육환경보호구역에서의 금지행위 등"), ("제10조", "행정처분의 요청")]
+    assert restriction_title_match(titles, "절대보호구역", "교육환경보호구역의 설정 등") == "제9조"
+    titles = [("제3조", "개발제한구역의 지정 등"), ("제12조", "개발제한구역에서의 행위제한")]
+    assert restriction_title_match(titles, "개발제한구역", "개발제한구역의 지정 등") == "제12조"
+
+
+def test_zone_name_containing_the_restriction_word_still_gets_its_restriction(store):
+    # "개발제한구역"은 이름에 "제한"이 들어 있다 — 이름을 뺀 나머지 제목으로 행위 제한 조문인지 본다
+    from law_mcp.engine.regulations import restriction_title_match, _acts
+    assert not _acts("개발제한구역의 지정 등", "개발제한구역")
+    titles = [("제3조", "개발제한구역의 지정 등"), ("제12조", "개발제한구역에서의 행위제한")]
+    assert restriction_title_match(titles, "개발제한구역", "개발제한구역의 지정 등") == "제12조"
+
+
+def test_citation_falls_back_to_the_name_tail():
+    # "수질보전특별대책지역"은 다른 법령에서 "「환경정책기본법」 제38조에 따른 특별대책지역"으로 인용된다 —
+    # 이름 그대로 인용이 없으면 이름의 뒷부분(구역 이름)으로 센다. 실측: 본문 검색 결과로 직제 규정이 붙었다
+    # 뒷부분으로 셀 때는 떼어 낸 앞부분(2글자 이상)이 그 조문에 함께 나와야 한다 — "가축사육제한구역"이
+    # "제한구역"으로 원자력안전법에, "절대보호구역"이 "보호구역"으로 군사기지법에 붙지 않게
+    from law_mcp.engine.regulations import _tails
+    assert _tails("수질보전특별대책지역") == [("", "수질보전특별대책지역"), ("수질", "보전특별대책지역"),
+                                       ("수질보", "전특별대책지역"), ("수질보전", "특별대책지역"),
+                                       ("수질보전특", "별대책지역"), ("수질보전특별", "대책지역")]

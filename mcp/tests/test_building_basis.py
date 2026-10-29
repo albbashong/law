@@ -228,3 +228,13 @@ def test_empty_use_on_building_basis_points_to_the_ratio_tool(store):
     assert r["status"] == "failed" and "zone_ratios" in r["message"]
     z = run_zone_ratios(store, region="영천시", zone="자연녹지지역")
     assert z["status"] == "ok" and "20" in z["facts"]["건폐율"]
+
+
+def test_use_without_place_lists_the_zones_that_allow_it(store):
+    # 실측 2026-10-28 W2 "창고를 지으려면 어떤 용도지역이어야돼?": 장소가 없으면 실패하고 되물었다 — 시행령 별표를
+    # 용도지역마다 훑어 그 용도를 바로 열거하는 지역·조례에 맡긴 지역을 준다
+    r = run_building_basis(store, "창고")
+    assert r["status"] == "ok", r["message"]
+    by = r["facts"]["용도지역별_허용"]
+    assert "일반공업지역" in by["시행령_허용"] and "제1종전용주거지역" not in by["시행령_허용"], by
+    assert "시군구" in r["message"] or "주소" in r["message"]

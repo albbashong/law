@@ -7,7 +7,7 @@ from pydantic import Field
 from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.follow import Ref, follow, node
-from law_mcp.engine.permits import development_permit, land_permits, permits_for_term, road_access
+from law_mcp.engine.permits import deeming_of, development_permit, land_permits, permits_for_term, road_access
 from law_mcp.engine.rules import find_items, header_of, is_partial_item, normalize_zone, section_kind, subtype_cover
 from law_mcp.engine.uses import facility_term, match_use, names as use_names
 from law_mcp.tools.article import resolve_region
@@ -113,6 +113,41 @@ def _ratios_only(store, region, zone, parcel_facts) -> dict:
                   " — 지으려는 것이 있으면 building_basis 로 찾으세요.")
 
 
+def _zones_for_use(store, use_hit: dict) -> dict:
+    """장소 없이 용도만 물었을 때 — 시행령 별표를 용도지역마다 훑어 그 용도를 바로 열거하는 지역, 조례에 맡긴 지역,
+    일부 유형만 열거하는 지역, 열거하지 않거나 금지하는 지역으로 나눈다(시군 조례·필지는 보지 않는다)."""
+    ho = use_hit["ho"]
+    mm = re.search(r"([가-하])목$", use_hit["label"])
+    mok = mm.group(1) if mm else None
+    term = (use_hit.get("term") or facility_term(use_hit["text"]) or None) if mok else None
+    enf = store.doc_named(ENF)
+    groups = {"시행령_허용": [], "조례로_허용_가능": [], "일부_유형만": [], "열거_안_됨_또는_금지": []}
+    refs: list[Ref] = []
+    for z in store._all("SELECT * FROM zone_map ORDER BY zone"):
+        annex = store.annex(enf["doc_id"], z["annex_no"])
+        items = store.annex_items(annex["annex_id"]) if annex else []
+        cover = lambda it: subtype_cover(it["text"].split("\n", 1)[0], ho, mok, term)
+        hits = [it for it in find_items(items, ho) if cover(it) is not False]
+        part = lambda it: (not cover(it)) if cover(it) is not None else is_partial_item(items, it, ho)
+        kinds = {}
+        for it in hits:
+            kinds.setdefault(section_kind(header_of(items, it)), []).append(it)
+        if z["mode"] == "can":
+            full = [it for it in kinds.get("허용", []) if not part(it)]
+            key = ("시행령_허용" if full else "일부_유형만" if kinds.get("허용")
+                   else "조례로_허용_가능" if kinds.get("조례허용") else "열거_안_됨_또는_금지")
+        else:
+            ban = [it for it in kinds.get("불가", []) if not part(it)]
+            key = ("열거_안_됨_또는_금지" if ban else "일부_유형만" if kinds.get("불가")
+                   else "조례로_허용_가능" if kinds.get("조례제한") else "시행령_허용")
+        groups[key].append(z["zone"])
+        if key != "열거_안_됨_또는_금지" and hits and len(refs) < 8:
+            r = _item_ref(store, enf["doc_id"], z["annex_no"], hits[0], f"{z['zone']} — {key}")
+            if r:
+                refs.append(r)
+    return {"groups": groups, "refs": refs}
+
+
 def run_building_basis(store, use: str, region: str | None = None, zone: str | None = None,
                        land_category: str | None = None, address: str | None = None,
                        parcel_lookup=None) -> dict:
@@ -163,7 +198,24 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     mm = re.search(r"([가-하])목$", uses[0]["label"])
     mok = mm.group(1) if mm else None              # 목 단위로 물었으면(일반음식점 = 제4호 자목) 목 단위로 본다
     term = (uses[0].get("term") or facility_term(uses[0]["text"]) or None) if mok else None
-    if not region or not zone:
+    if not zone:   # 장소 없이 용도만 — 어느 용도지역에서 지을 수 있는지를 시행령 별표로
+        found = _zones_for_use(store, uses[0])
+        extra, chain = [], list(found["refs"])
+        for r in permits_for_term(store, [uname, use]):
+            r.note = f"{uname} 관련 인허가 — {r.title}"
+            chain.append(r)
+            extra.append(f"{r.title}({r.law} {r.article})")
+        facts = {"건축물용도": f"{uname}(건축법 시행령 별표 1 제{ho}호)", "용도지역별_허용": found["groups"],
+                 "추가검토": extra}
+        if region:
+            facts["시군구"] = region
+        packed, over = pack(chain, s.facts_max_chars - size(facts) - 300, 300)
+        facts["refs"], facts["더_볼_연결"] = packed, over[:6]
+        fit(facts, s.facts_max_chars)
+        return result("ok", facts, "국토계획법 시행령 별표 기준으로 이 용도를 지을 수 있는 용도지역입니다. 조례로_허용_가능은 "
+                      "시군 도시계획 조례가 정하고, 일부_유형만은 열거된 유형에 해당해야 합니다. 특정 땅이면 주소(address)나 "
+                      "시군구(region)+용도지역(zone)으로 다시 불러 조례·건폐율·용적률까지 확인하세요.")
+    if not region:
         return result("failed", {}, "시군구(region)와 용도지역(zone), 또는 주소(address)가 필요합니다.")
     zkey = normalize_zone(zone)
     zm = store.zone(zkey)
@@ -275,6 +327,11 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         r.note = f"{uname} 관련 인허가 — {r.title}"
         chain.append(r)
         extra.append(f"{r.title}({r.law} {r.article})")
+        deem = deeming_of(store, r)
+        if deem:   # 이 승인을 받으면 받은 것으로 보는 인허가 — 따로 받는 절차로 안내하지 않게
+            deem.note = f"{r.title}을 받으면 다른 인허가를 받은 것으로 봄(의제)"
+            chain.append(deem)
+            extra.append(f"{r.title} 시 의제되는 인허가({deem.law} {deem.article})")
     dp = development_permit(store)
     if dp:
         dp.note = "개발행위허가 대상 여부 확인"
@@ -340,7 +397,7 @@ def register(mcp, get_store):
         zone: Annotated[str | None, Field(description="용도지역 (예: 자연녹지지역) — address 가 없을 때")] = None,
         land_category: Annotated[str | None, Field(description="지목 (예: 전, 답, 임야, 대)")] = None,
     ) -> dict:
-        """여기에 공장·단독주택 지을 수 있어? 건폐율·용적률은? — 용도지역별 건축제한의 근거 법령·조례를 찾는다.
+        """여기에 공장·단독주택 지을 수 있어? 창고는 어느 용도지역에 지을 수 있어? 지으려면 어느 법령을 따라야 해? 건폐율·용적률은? — 지으려는 것의 용도지역별 건축제한·인허가 근거 법령·조례를 찾는다.
 
         국토계획법 시행령 별표(용도지역별 건축물)와 해당 시군 도시·군계획 조례 별표에서 그 용도를 찾고,
         건폐율·용적률 조문, 상위법, 지목·용도를 정의하는 법률의 허가·승인 조문까지 refs 로 준다.
