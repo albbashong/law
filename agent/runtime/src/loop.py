@@ -26,6 +26,7 @@ import json
 import re
 import logging
 from collections.abc import Mapping
+from difflib import SequenceMatcher
 from typing import Any, Protocol
 
 from conditions import reversed_conditions
@@ -561,6 +562,23 @@ def _bare(text: str) -> str:
     return re.sub(r"[^\w]|_", "", re.sub(r"\\[nrt]", " ", text))
 
 
+def _quoted_from(part: str, corpus: str) -> bool:
+    """인용 조각이 원문에 있는가 — 그대로 있거나, ANSWER_QUOTE_MATCH_RATIO 가 있으면 가장 길게 겹치는 곳 둘레에서
+    차례대로 맞는 글자의 비율이 그 값 이상인가."""
+    if part in corpus:
+        return True
+    ratio = settings.answer_quote_match_ratio
+    if ratio <= 0:
+        return False
+    hit = SequenceMatcher(None, corpus, part, autojunk=False).find_longest_match(0, len(corpus), 0, len(part))
+    if not hit.size:
+        return False
+    start = max(0, hit.a - hit.b - len(part) // 2)
+    window = corpus[start:hit.a - hit.b + len(part) + len(part) // 2]
+    same = sum(b.size for b in SequenceMatcher(None, window, part, autojunk=False).get_matching_blocks())
+    return same / len(part) >= ratio
+
+
 def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
     """답의 따옴표 인용문(ANSWER_QUOTE_PATTERN) 중 도구 결과·사용자 발화에 그대로 없는 것.
 
@@ -579,7 +597,7 @@ def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...]
     for hit in re.findall(pattern, "\n".join(lines)):
         quote = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
         parts = [_bare(x) for x in re.split(r"…|\.{3,}", quote)]
-        if any(len(x) >= settings.answer_quote_min_chars and x not in corpus for x in parts) and quote not in out:
+        if any(len(x) >= settings.answer_quote_min_chars and not _quoted_from(x, corpus) for x in parts) and quote not in out:
             out.append(quote)
     return out
 

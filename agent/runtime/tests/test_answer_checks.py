@@ -123,3 +123,20 @@ def test_law_names_quoted_inside_looked_up_text_count(monkeypatch):
     msgs = [tool({"법령": "농지법", "원문": "다만, 「국토의 계획 및 이용에 관한 법률」에 따른 도시지역"})]
     assert loop.loose_unnamed_laws("국토의 계획 및 이용에 관한 법률에 따른 도시지역", msgs) == []
     assert loop.loose_unnamed_laws("건축물의 분양에 관한 법률", msgs) == ["건축물의 분양에 관한 법률"]
+
+
+def test_near_verbatim_quotes_pass_when_a_match_ratio_is_set(monkeypatch):
+    # ANSWER_QUOTE_MATCH_RATIO: 인용 글자 중 원문 한 곳과 차례대로 맞는 비율이 이 값 이상이면 원문 인용으로 본다(0 이면 그대로만).
+    # 실측 2026-11-06: "…건축물 : 별표 20에 규정된 건축물"을 "…건축물은 별표 20에 규정된 건축물"로 옮긴 것이 확인 안 됨으로 붙었다
+    monkeypatch.setattr(settings, "answer_quote_pattern", QUOTE)
+    monkeypatch.setattr(settings, "answer_quote_min_chars", 6)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조(?:\s*의\s*\d+)?|별표\s*\d+")
+    msgs = [article("국토의 계획 및 이용에 관한 법률 시행령", "제71조",
+                    "19. 계획관리지역안에서 건축할 수 없는 건축물 : 별표 20에 규정된 건축물")]
+    near = "제71조제1항제19호 “계획관리지역 안에서 건축할 수 없는 건축물은 별표 20에 규정된 건축물”"
+    made = "제71조 “계획관리지역에서는 모든 공장을 지을 수 없다”"
+    monkeypatch.setattr(settings, "answer_quote_match_ratio", 0.0)
+    assert loop.misquoted(near, msgs) != []
+    monkeypatch.setattr(settings, "answer_quote_match_ratio", 0.9)
+    assert loop.misquoted(near, msgs) == []
+    assert loop.misquoted(made, msgs) == ["계획관리지역에서는 모든 공장을 지을 수 없다"]

@@ -152,6 +152,10 @@ class Settings(BaseSettings):
         description="답변에서 따옴표 인용문을 잡는 정규식(비지 않은 그룹이 인용문). 조문 번호(ANSWER_CITE_PATTERN)가 적힌 줄의 인용문이 이번 대화의 도구 결과·사용자 "
         "발화에 그대로 없으면(공백·문장부호 무시, 줄임표로 줄인 곳은 조각마다) 인용처럼 되돌린다. 비우면 검증하지 않는다.")
     answer_quote_min_chars: int = Field(default=6, description="이보다 짧은 인용 조각(따옴표로 묶은 낱말)은 대조하지 않는다.")
+    answer_quote_match_ratio: float = Field(
+        default=0.0, description="인용 글자 중 원문 한 곳과 차례대로 맞는 비율이 이 값 이상이면 원문 인용으로 본다(조사·"
+        "쌍점 정도만 바꿔 옮긴 인용). 0 이면 원문에 그대로 있어야 한다.",
+    )
     answer_law_pattern: str = Field(
         default="",
         description="답변에서 법령명을 잡는 정규식(비지 않은 그룹이 이름). 이름이 이번 대화의 도구 결과·사용자 발화에 "
