@@ -119,6 +119,18 @@ class Settings(BaseSettings):
         default="",
         description="되돌린 뒤에도 남은 인용을 답변 끝에 밝히는 문장({cites}). 비우면 덧붙이지 않는다.",
     )
+    require_args_text: str = Field(
+        default="도구를 부르지 않고 답했습니다. 도구 {tool}을(를) 부를 인자만 JSON 으로 채우세요. 설명은 쓰지 마세요.",
+        description="꼭 부를 도구(tool_choice=required)에 글로 답했을 때, 그 도구의 입력 형식을 구조화 출력으로 걸어 인자만 "
+        "다시 받으며 붙이는 문장({tool}). 실측 2026-11-05: ollama 는 required 를 무시하고 vLLM gpt-oss 도 인사말엔 글로 "
+        "답했지만, 구조화 출력은 둘 다 지켰다. 비우면 다시 받지 않는다.",
+    )
+    answer_no_lookup_text: str = Field(
+        default="",
+        description="질문 정리 단계가 먼저 부를 도구를 골랐는데 한 번도 조회하지 않고 답했을 때, 한 번 되돌리며 붙이는 문장. "
+        "tool_choice=required 를 지키지 않는 서버에서 첫 라운드가 글로 답하면 인용 없는 답은 대조할 것이 없어 그대로 나간다. "
+        "비우면 끈다.",
+    )
     answer_cite_retry_text: str = Field(
         default="답변에 쓴 다음 인용은 이번 대화의 도구 결과에 없습니다: {cites}. "
         "도구로 조회해 확인하거나, 확인할 수 없으면 답변에서 빼고 다시 답하세요.",

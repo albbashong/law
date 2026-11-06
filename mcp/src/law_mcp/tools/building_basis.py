@@ -148,6 +148,14 @@ def _zones_for_use(store, use_hit: dict) -> dict:
     return {"groups": groups, "refs": refs}
 
 
+def _add_land_permits(store, land_category, chain: list, extra: list) -> None:
+    """지목의 전용허가 조문 — 장소가 있든 없든 붙인다."""
+    for r in land_permits(store, land_category):
+        r.note = f"지목 {land_category} — {r.title}"
+        chain.append(r)
+        extra.append(f"{r.title}({r.law} {r.article})")
+
+
 def run_building_basis(store, use: str, region: str | None = None, zone: str | None = None,
                        land_category: str | None = None, address: str | None = None,
                        parcel_lookup=None) -> dict:
@@ -201,6 +209,7 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     if not zone:   # 장소 없이 용도만 — 어느 용도지역에서 지을 수 있는지를 시행령 별표로
         found = _zones_for_use(store, uses[0])
         extra, chain = [], list(found["refs"])
+        _add_land_permits(store, land_category, chain, extra)
         for r in permits_for_term(store, [uname, use]):
             r.note = f"{uname} 관련 인허가 — {r.title}"
             chain.append(r)
@@ -324,10 +333,7 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
 
     # 5) 관련 인허가 — 지목·용도를 정의하는 법률에서 제목으로 찾는다 (표를 두지 않는다)
     extra = []
-    for r in land_permits(store, land_category):
-        r.note = f"지목 {land_category} — {r.title}"
-        chain.append(r)
-        extra.append(f"{r.title}({r.law} {r.article})")
+    _add_land_permits(store, land_category, chain, extra)
     for r in permits_for_term(store, [uname, use]):
         r.note = f"{uname} 관련 인허가 — {r.title}"
         chain.append(r)

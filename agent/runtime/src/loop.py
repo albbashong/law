@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -71,6 +72,11 @@ STORY_TOOL: dict[str, Any] = {
     "input_schema": {"type": "object", "properties": {}},
 }
 RESERVED_TOOLS = frozenset({ASK_USER, STORY})
+
+
+async def _value(value: Any) -> Any:
+    """함께 부르는(gather) 자리에서 부를 필요가 없는 쪽이 낼 값."""
+    return value
 
 
 def story_forms() -> dict[str, tuple[str, str]]:
@@ -669,23 +675,33 @@ async def retell(model: Any, question: str, answer: str, messages: list[dict[str
         return (step.get("answer") or "").strip()
 
     forms = story_forms()
-    if forms and settings.story_form_select_prompt:     # 검증된 답을 본 뒤에 틀을 다시 고른다
+
+    async def pick(form: str | None) -> str | None:     # 검증된 답을 본 뒤에 틀을 다시 고른다
+        if not (forms and settings.story_form_select_prompt):
+            return form
         menu = "\n".join(f"- {k}: {v[0]}" for k, v in forms.items())
         picked = await ask((AGENT_DIR / settings.story_form_select_prompt).read_text(encoding="utf-8")
                            .replace("{설명틀_목록}", menu))
         hits = sorted((picked.find(k), k) for k in forms if k in picked)
-        form = hits[0][1] if hits else form
-    chosen = forms.get(form or "")
-    system = system.replace("{설명틀}", form if chosen else "일반").replace("{설명틀_쓰는법}", chosen[1] if chosen else "")
+        return hits[0][1] if hits else form
 
     keys = [k.strip() for k in settings.story_plan_grounded_keys.split(",") if k.strip()]
-    if settings.story_plan_prompt and (not keys or any(f'"{k}"' in sources for k in keys)):
+    planning = bool(settings.story_plan_prompt and (not keys or any(f'"{k}"' in sources for k in keys)))
+
+    async def planned() -> dict[str, Any] | None:
         plan_prompt = (AGENT_DIR / settings.story_plan_prompt).read_text(encoding="utf-8")
         for _ in range(max(1, settings.story_attempts)):
             plan = checked_plan(await ask(plan_prompt), sources, messages, cite_notes)
             if plan:
-                break
-        else:
+                return plan
+        return None
+
+    # 틀 고르기와 계획은 서로의 결과를 쓰지 않는다(계획 지시엔 틀이 없다) — 함께 부른다
+    form, plan = await asyncio.gather(pick(form), planned() if planning else _value(None))
+    chosen = forms.get(form or "")
+    system = system.replace("{설명틀}", form if chosen else "일반").replace("{설명틀_쓰는법}", chosen[1] if chosen else "")
+    if planning:
+        if not plan:
             logger.info("story: form=%s no checked plan — factual answer", form)
             return answer
         request += settings.story_plan_text.format(plan=json.dumps(plan, ensure_ascii=False))
@@ -1046,6 +1062,8 @@ async def run_query(
         calls_made: list[dict[str, Any]] = []      # 작업 기억에 남길 성공한 호출
         pick: tuple[str, str] | None = None        # 모델이 목록에서 골라 다시 불러야 하는 (도구, 목록 키)
         pick_sent_back = False
+        # 정리 단계가 먼저 부를 도구를 골랐다 = 근거를 찾아야 하는 질문 — 조회 없이 낸 답은 한 번 되돌린다
+        lookup_due, lookup_sent_back, lookup_required_done = bool(lead), False, False
         mentions: list[str] = []                   # 도구가 답에 꼭 나와야 한다고 표시한 이름(필지 규제 등)
 
         def done(stopped: str, answer: str = "", **extra: Any) -> dict[str, Any]:
@@ -1145,6 +1163,10 @@ async def run_query(
                 # 정리 단계가 고른 도구 — 첫 라운드는 그 도구 하나만 주고 꼭 부르게 한다(인자는 모델이 채운다)
                 step = await model.next_step(messages, [t for t in tools if t["name"] == lead], require=True)
                 lead = ""
+            elif lookup_sent_back and not calls_made and not lookup_required_done and not force_answer:
+                # 조회 없이 답해 되돌린 라운드 — 문장만 붙이면 또 글로 답한다(실측 qwen3.5:9b), 도구를 꼭 부르게 한다
+                lookup_required_done = True
+                step = await model.next_step(messages, tools, require=True)
             else:
                 step = await model.next_step(messages, [] if force_answer else tools)
             force_answer = False
@@ -1153,6 +1175,13 @@ async def run_query(
             usage_total["tokens_out"] += step_usage.get("tokens_out") or 0
 
             if "answer" in step:
+                # tool_choice=required 를 지키지 않는 서버에선 첫 라운드가 글로 답한다 — 인용이 없으면 대조할 것도 없어 그대로 나간다
+                if (lookup_due and not calls_made and not lookup_sent_back and settings.answer_no_lookup_text
+                        and round_idx + 1 < rounds_max):
+                    lookup_sent_back = True
+                    messages.append({"role": "assistant", "content": step["answer"]})
+                    messages.append({"role": "user", "content": settings.answer_no_lookup_text})
+                    continue
                 bad = ungrounded(step["answer"], messages, cite_notes)
                 bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
                 bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
@@ -1213,16 +1242,19 @@ async def run_query(
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
                 if not bad and settings.param_prompt:
                     say(settings.progress_params_text)
-                params = [] if bad else await extract_parameters(model, query, answer, messages, usage_total)
                 # 확인 안 된 인용이 남은 답도 이야기로 풀되, 그 인용은 쓰지 말라고 알린다(알릴 틀이 없으면 예전처럼 건너뜀)
-                if story_wanted and not (bad and settings.answer_unverified_text and not settings.story_unverified_text):
+                telling = story_wanted and not (bad and settings.answer_unverified_text and not settings.story_unverified_text)
+                if telling:
                     say(settings.progress_story_text)
-                    story = await retell(model, query, told, messages, cite_notes, usage_total,
-                                         story_form, story_laws(tool_results), bad)
-                    # 덧붙이는 틀이 있으면 사실 답은 그대로 두고 이야기를 아래에 붙인다(이야기가 사실 답이 되지 않게)
-                    if story != told:
-                        answer = (settings.story_append_format.format(answer=answer, story=story)
-                                  if settings.story_append_format else story)
+                # 값 뽑기와 이야기는 둘 다 확정된 답만 보고 서로의 결과를 쓰지 않는다 — 함께 부른다
+                params, story = await asyncio.gather(
+                    extract_parameters(model, query, answer, messages, usage_total) if not bad else _value([]),
+                    retell(model, query, told, messages, cite_notes, usage_total,
+                           story_form, story_laws(tool_results), bad) if telling else _value(told))
+                # 덧붙이는 틀이 있으면 사실 답은 그대로 두고 이야기를 아래에 붙인다(이야기가 사실 답이 되지 않게)
+                if story != told:
+                    answer = (settings.story_append_format.format(answer=answer, story=story)
+                              if settings.story_append_format else story)
                 return done("answer", answer=answer, ungrounded=bad, parameters=params)
 
             calls = _tool_calls_from_step(step)
@@ -1581,6 +1613,11 @@ class ModelAdapter:
         message = choice.message
         usage = _usage_from_response(response)
 
+        if not message.tool_calls and require and tools and settings.require_args_text:
+            forced = await self._forced_call(messages, tools, usage)
+            if forced is not None:
+                return forced
+
         if choice.finish_reason == "tool_calls" and message.tool_calls:
             calls = [
                 {
@@ -1607,6 +1644,48 @@ class ModelAdapter:
         # finish_reason == "stop" (또는 그 밖의 종료) — content 가 최종 답이다.
         # message.reasoning 은 절대 여기 섞지 않는다: 사용자에게 보일 텍스트가 아니다.
         return {"answer": message.content or "", "usage": usage}
+
+
+    async def _forced_call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]],
+                           usage: dict[str, int]) -> dict[str, Any] | None:
+        """꼭 부를 도구에 글로 답했다 — tool_choice=required 를 지키지 않는 서버가 있다. 도구의 입력 형식을 구조화
+        출력으로 걸어 인자만 다시 받아 도구 호출로 바꾼다. 도구가 여럿이면 {"tool": 이름, "args": 인자} 중 하나로
+        받는다. 형식 앞에 새어 나온 문장은 버리고 { … } 만 읽는다. 못 읽으면 None."""
+        schemas = {t["name"]: t.get("input_schema") or {"type": "object", "properties": {}} for t in tools}
+        names = list(schemas)
+        schema = schemas[names[0]] if len(names) == 1 else {"anyOf": [
+            {"type": "object", "properties": {"tool": {"const": n}, "args": sc}, "required": ["tool", "args"]}
+            for n, sc in schemas.items()]}
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "temperature": self._temperature,
+            "messages": [*messages, {"role": "user", "content": settings.require_args_text.format(tool=", ".join(names))}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "tool_call", "schema": schema}},
+        }
+        if settings.reasoning_effort:
+            kwargs["reasoning_effort"] = settings.reasoning_effort
+        response = await self._get_client().chat.completions.create(**kwargs)
+        more = _usage_from_response(response)
+        for k in usage:      # 못 읽어 글 답을 쓰더라도 이 요청의 토큰은 센다
+            usage[k] += more[k]
+        text = response.choices[0].message.content or ""
+        start, end = text.find("{"), text.rfind("}")
+        try:
+            got = json.loads(text[start:end + 1]) if 0 <= start < end else None
+        except json.JSONDecodeError:
+            got = None
+        name, args = (names[0], got) if len(names) == 1 else (
+            (got.get("tool"), got.get("args")) if isinstance(got, dict) else (None, None))
+        if name not in schemas or not isinstance(args, dict):
+            logger.info("forced call: unreadable arguments for %s: %s", names, text[:200])
+            return None
+        arguments = json.dumps(args, ensure_ascii=False)
+        return {
+            "tools": [{"id": "forced_0", "name": name, "args": args}],
+            "raw_assistant_message": {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "forced_0", "type": "function", "function": {"name": name, "arguments": arguments}}]},
+            "usage": usage,
+        }
 
 
 def _usage_from_response(response: Any) -> dict[str, int]:

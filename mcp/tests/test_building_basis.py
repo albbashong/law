@@ -256,3 +256,11 @@ def test_deciding_articles_are_marked_for_the_answer(store):
     assert any(m.startswith("별표 17 ") for m in marked)
     assert any(m.startswith("제71조") for m in marked)
     assert r["facts"]["판단근거"] and all(" " in x for x in r["facts"]["판단근거"])
+
+
+def test_land_category_is_used_without_a_place(store):
+    # 장소 없이 용도만 물어도 지목의 전용허가가 붙는다 — 실측 2026-11-06: "산지에 주택" 이 지목을 버려 산지관리법이 빠졌다
+    r = run_building_basis(store, "공장", land_category="전")
+    assert r["status"] == "ok", r["message"]
+    assert "농지법 제34조" in " ".join(r["facts"]["추가검토"])
+    assert any(x["law"] == "농지법" and x["article"] == "제34조" for x in r["facts"]["refs"])

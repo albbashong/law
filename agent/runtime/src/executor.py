@@ -179,6 +179,11 @@ class Executor:
         if params or any(a.name == "parameters" for a in (store.get(task_id).artifacts or [])):
             store.put_artifact(task_id, Artifact.data(task_id, "parameters", params))
 
+        # 확인 결과 — 조회 수와 조회 원문으로 확인 안 된 인용. 사실만 싣고, 보류할지는 부르는 쪽이 정한다
+        if "ungrounded" in raw or any(a.name == "verification" for a in (store.get(task_id).artifacts or [])):
+            store.put_artifact(task_id, Artifact.data(task_id, "verification", {
+                "lookups": len(raw.get("calls") or []), "unverified": list(raw.get("ungrounded") or [])}))
+
         answer = shaped.get("message") or ""
 
         # 내 일이 아니다(SPEC 5장) — 실패도 완료도 아닌 거절. 클라이언트가 다른 길을 찾게 한다.
