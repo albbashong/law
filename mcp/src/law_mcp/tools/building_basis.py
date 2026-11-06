@@ -113,7 +113,7 @@ def _ratios_only(store, region, zone, parcel_facts) -> dict:
                   " — 지으려는 것이 있으면 building_basis 로 찾으세요.")
 
 
-def _zones_for_use(store, use_hit: dict) -> dict:
+def _zones_for_use(store, use_hit: dict, only: str | None = None) -> dict:
     """장소 없이 용도만 물었을 때 — 시행령 별표를 용도지역마다 훑어 그 용도를 바로 열거하는 지역, 조례에 맡긴 지역,
     일부 유형만 열거하는 지역, 열거하지 않거나 금지하는 지역으로 나눈다(시군 조례·필지는 보지 않는다)."""
     ho = use_hit["ho"]
@@ -124,6 +124,8 @@ def _zones_for_use(store, use_hit: dict) -> dict:
     groups = {"시행령_허용": [], "조례로_허용_가능": [], "일부_유형만": [], "열거_안_됨_또는_금지": []}
     refs: list[Ref] = []
     for z in store._all("SELECT * FROM zone_map ORDER BY zone"):
+        if only and z["zone"] != only:
+            continue
         annex = store.annex(enf["doc_id"], z["annex_no"])
         items = store.annex_items(annex["annex_id"]) if annex else []
         cover = lambda it: subtype_cover(it["text"].split("\n", 1)[0], ho, mok, term)
@@ -145,6 +147,13 @@ def _zones_for_use(store, use_hit: dict) -> dict:
             r = _item_ref(store, enf["doc_id"], z["annex_no"], hits[0], f"{z['zone']} — {key}")
             if r:
                 refs.append(r)
+        if only and not refs:   # 열거되지 않음 — 별표 자체를 근거로
+            base = node(store, enf["doc_id"], f"별표{z['annex_no']}")
+            if base:
+                base.note = f"{z['zone']} — {key}" + (" (건축 금지 목록에 없음)" if z["mode"] == "cannot" else "")
+                refs.append(base)
+        if only:    # 별표를 맡긴 윗 조문(시행령 제71조 → 법 제76조)
+            refs += [u for r in list(refs) for u in follow(store, r.doc_id, r.path, None, "up", 2).refs[1:]]
     return {"groups": groups, "refs": refs}
 
 
@@ -224,13 +233,24 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         return result("ok", facts, "국토계획법 시행령 별표 기준으로 이 용도를 지을 수 있는 용도지역입니다. 조례로_허용_가능은 "
                       "시군 도시계획 조례가 정하고, 일부_유형만은 열거된 유형에 해당해야 합니다. 특정 땅이면 주소(address)나 "
                       "시군구(region)+용도지역(zone)으로 다시 불러 조례·건폐율·용적률까지 확인하세요.")
-    if not region:
-        return result("failed", {}, "시군구(region)와 용도지역(zone), 또는 주소(address)가 필요합니다.")
     zkey = normalize_zone(zone)
     zm = store.zone(zkey)
     if not zm:
         valid = [r["zone"] for r in store._all("SELECT zone FROM zone_map")]
         return result("failed", {"용도지역목록": valid}, f"'{zone}'을 용도지역으로 해석하지 못했습니다.")
+    if not region:   # 용도지역만 — 시행령 별표는 전국 공통이라 그 용도지역의 판정을 낸다(조례·건폐율은 시군구가 있어야)
+        found = _zones_for_use(store, uses[0], only=zm["zone"])
+        verdict = next(k for k, v in found["groups"].items() if v)
+        extra, chain = [], []
+        _add_land_permits(store, land_category, chain, extra)
+        facts = {"용도지역": zm["zone"], "건축물용도": f"{uname}(건축법 시행령 별표 1 제{ho}호)", "근거상태": verdict,
+                 "판단근거": list(dict.fromkeys(f"{r.law} {r.article}" for r in found["refs"]))[:4], "추가검토": extra}
+        packed, over = pack(found["refs"] + chain, s.facts_max_chars - size(facts) - 300, 300)
+        facts["refs"], facts["더_볼_연결"] = packed, over[:6]
+        fit(facts, s.facts_max_chars)
+        return result("ok", facts, "국토계획법 시행령 별표 기준(전국 공통)의 이 용도지역 판정입니다. 조례로_허용_가능·일부_유형만은 "
+                      "시군 도시계획 조례가 더 정하므로, 특정 땅이면 시군구(region)나 주소(address)를 넣어 다시 불러 조례·"
+                      "건폐율·용적률까지 확인하세요. 판단근거의 조문은 답의 근거 표에 적으세요.")
     reg, err = resolve_region(store, region)
     if err:
         return err

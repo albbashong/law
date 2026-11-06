@@ -264,3 +264,27 @@ def test_land_category_is_used_without_a_place(store):
     assert r["status"] == "ok", r["message"]
     assert "농지법 제34조" in " ".join(r["facts"]["추가검토"])
     assert any(x["law"] == "농지법" and x["article"] == "제34조" for x in r["facts"]["refs"])
+
+
+def test_zone_without_a_place_reads_the_national_annex(store):
+    # 용도지역만 있고 시군구가 없어도 시행령 별표는 전국 공통이라 답할 수 있다 — 실측 2026-11-06: "계획관리지역에 공장"이
+    # "시군구가 필요합니다"로 실패해 모델이 다른 시군 조례·개발진흥지구 조문을 근거로 댔다
+    r = run_building_basis(store, "공장", zone="계획관리지역")
+    f = r["facts"]
+    assert r["status"] == "ok", r["message"]
+    assert f["용도지역"] == "계획관리지역" and f["근거상태"] == "일부_유형만"
+    arts = {(x["law"], x["article"]) for x in f["refs"]}
+    assert any(l == "국토의 계획 및 이용에 관한 법률 시행령" and a.startswith("별표 20") for l, a in arts)
+    assert any(l == "국토의 계획 및 이용에 관한 법률 시행령" and a.startswith("제71조") for l, a in arts)
+    assert not any("조례" in l for l, _ in arts)
+    assert "region" in r["message"]
+
+
+def test_zone_without_a_place_not_listed(store):
+    r = run_building_basis(store, "단독주택", zone="계획관리지역")
+    assert r["status"] == "ok" and r["facts"]["근거상태"] == "시행령_허용"
+
+
+def test_unknown_zone_without_a_place(store):
+    r = run_building_basis(store, "공장", zone="달나라지역")
+    assert r["status"] == "failed" and "용도지역목록" in r["facts"]
