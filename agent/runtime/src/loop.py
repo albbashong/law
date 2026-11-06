@@ -1194,8 +1194,11 @@ async def run_query(
 
             if "answer" in step:
                 # tool_choice=required 를 지키지 않는 서버에선 첫 라운드가 글로 답한다 — 인용이 없으면 대조할 것도 없어 그대로 나간다
-                if (lookup_due and not calls_made and not lookup_sent_back and settings.answer_no_lookup_text
-                        and round_idx + 1 < rounds_max):
+                # 정리 단계가 도구를 비웠어도 조회 없이 조문을 인용한 답은 근거가 없다 — 같은 방법으로 되돌린다
+                cites_without_lookup = bool(settings.answer_cite_pattern
+                                            and re.search(settings.answer_cite_pattern, step["answer"]))
+                if ((lookup_due or cites_without_lookup) and not calls_made and not lookup_sent_back
+                        and settings.answer_no_lookup_text and round_idx + 1 < rounds_max):
                     lookup_sent_back = True
                     messages.append({"role": "assistant", "content": step["answer"]})
                     messages.append({"role": "user", "content": settings.answer_no_lookup_text})

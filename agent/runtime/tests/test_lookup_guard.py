@@ -105,3 +105,22 @@ async def test_executor_reports_lookups_and_unverified_cites():
 async def test_executor_reports_a_checked_answer_too():
     got = await _verification({"answer": "답", "calls": [{"tool": "law_search", "args": {}}], "ungrounded": []})
     assert got == {"lookups": 1, "unverified": []}
+
+
+async def test_answer_citing_articles_without_any_lookup_is_sent_back_even_with_no_tool_picked(monkeypatch, tmp_path):
+    # 정리 단계가 도구를 비워도, 조회 없이 조문을 인용한 답은 근거가 없다 — 실측 2026-11-06 qwen3.5:9b "건축신고만으로
+    # 집 지을 수 있는 경우가 있어?": 도구를 고르지 않아 조회 0회에 제11조·제23조를 인용한 답이 나갔다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([NOT_PICKED, {"answer": "제14조에 따라 됩니다."}, LOOKUP, {"answer": "제25조에 따라 됩니다."}])
+    raw = await loop.run_query("건축신고만으로 집 지을 수 있어?", mcp=Mcp(), model=model)
+    assert model.seen[2][-1] == {"role": "user", "content": NOTE} and model.required[2] is True
+    assert raw["answer"] == "제25조에 따라 됩니다." and len(raw["calls"]) == 1
+
+
+async def test_answer_without_citations_and_no_tool_picked_is_kept(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([NOT_PICKED, {"answer": "안녕하세요."}])
+    raw = await loop.run_query("안녕?", mcp=Mcp(), model=model)
+    assert raw["answer"] == "안녕하세요." and len(model.seen) == 2
