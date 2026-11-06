@@ -10,7 +10,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY mcp/src ./src
 RUN uv sync --frozen --no-dev
 
-ENV LAW_DB_PATH=/data/lawdb.sqlite MCP_HOST=0.0.0.0 MCP_PORT=7017
+ENV LAW_DB_PATH=/data/lawdb.sqlite WORDS_DB_PATH=/data/lawdb_words.sqlite MCP_HOST=0.0.0.0 MCP_PORT=7017
 EXPOSE 7017
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD python -c "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://127.0.0.1:7017/health', timeout=4).status != 200)"

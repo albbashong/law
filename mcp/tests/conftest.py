@@ -33,3 +33,11 @@ def fixture_db(tmp_path_factory):
 def store(fixture_db):
     from law_mcp.store.db import Store
     return Store(fixture_db)
+
+
+@pytest.fixture(scope="session")
+def words_db(fixture_db, tmp_path_factory):
+    from law_mcp.engine.words import build_words_index
+    out = tmp_path_factory.mktemp("words") / "lawdb_words.sqlite"
+    build_words_index(fixture_db, out, procs=1, log=lambda m: None)
+    return out

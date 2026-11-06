@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     law_name_fix_margin: float = 0.05
     # 필지 규제 이름이 이보다 많은 조문 제목에 나오면(도로·공원처럼 흔한 말) 근거 조문을 붙이지 않는다 — 이름만 남긴다
     regulation_title_df_max: int = 1000
+    # law_search 방식 — trigram(lawdb 의 세 글자 조각 색인) · words(형태소 낱말 색인, words_db_path) · hybrid(둘을 순위 융합).
+    # 낱말 색인 파일이나 분석기가 없으면 trigram 으로 찾는다. 낱말 색인은 scripts/build_words.py 로 만든다.
+    search_method: str = "trigram"
+    words_db_path: Path = ROOT / "data" / "lawdb_words.sqlite"
+    # 결과를 법령·자치법규로 나눠(각 limit 개, 법령 먼저) 담는다 — 수가 10배 넘는 시군 조례가 법령 조문을 덮지 않게
+    search_split_sources: bool = False
+    words_title_weight: float = 10.0  # 제목 칸 가중 — 실측(자동 평가 300문항) 2·5·10 중 10 이 가장 나았다
     # 도구 결과 최상위에 두는 '답에 꼭 나와야 할 이름' 키 — 모델에게는 안 보이고 런타임이 답을 점검할 때 쓴다
     mention_key: str = "mention"
 

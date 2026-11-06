@@ -8,6 +8,7 @@ law-mcp(:7017), law_review 에이전트(:7016), 시험 페이지 playground(:701
 | law-mcp 이미지 | 0.2GB | python:3.12-slim + 의존성 |
 | law-review 이미지 | 0.25GB | 에이전트·playground 공용 |
 | `lawdb.sqlite` | 7.4GB | 이미지에 넣지 않고 읽기 전용 볼륨으로 붙인다 |
+| `lawdb_words.sqlite` | 1.4GB | 낱말 색인(선택) — `SEARCH_METHOD=words·hybrid` 일 때만. 같은 볼륨에 둔다 |
 
 ## 1. 준비
 
@@ -17,6 +18,7 @@ git clone <저장소> permit-law && cd permit-law
 
 # 법령 DB 를 옮긴다 — 다른 경로에 두면 LAW_DATA_DIR 로 알려 준다
 mkdir -p data && rsync -avP <원본 서버>:/home/ubuntu/permit/law/data/lawdb.sqlite data/
+#   낱말 색인을 쓰면 lawdb_words.sqlite 도 함께 옮긴다(없으면 law_search 는 trigram 으로 찾는다)
 #   export LAW_DATA_DIR=/srv/permit-law/data   # 기본값은 ../data (deploy/ 기준)
 
 # 설정 파일 — 둘 다 git 에 올리지 않는다 (.gitignore: deploy/*.env)

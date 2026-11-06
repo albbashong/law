@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt
 from law_mcp.engine.structure import leads
 from law_mcp.store.db import nospace
@@ -170,12 +171,77 @@ def _with_hint(r: dict, hint: dict | None) -> dict:
 
 
 def run_law_search(store, query: str, scope: str = "all", region: str | None = None, limit: int = 8) -> dict:
-    r = _with_hint(_run_law_search(store, query, scope, region, limit), _basis_hint(store, query, region))
+    r = _with_hint(_by_method(store, query, scope, region, limit), _basis_hint(store, query, region))
     d = None if "먼저_부를_도구" in r["facts"] else _definition_hint(store, query)
     if d:
         r["facts"]["용어_정의"] = d
         r["message"] += f" 용어 '{d['args']['term']}'의 뜻은 law_definition 으로 정의 조문을 바로 찾을 수 있습니다."
     return r
+
+
+RRF_K = 60     # 순위 융합 상수(관례값) — 1/(K+순위) 를 더한다
+SPLIT_POOL = 3  # 법령·자치법규로 나눌 때 모으는 후보 배수 — 한쪽이 상위를 독차지해도 다른 쪽이 남게
+
+
+def _by_method(store, query: str, scope: str, region: str | None, limit: int) -> dict:
+    """설정(SEARCH_METHOD)에 따라 찾는다. 낱말 색인을 못 쓰면 trigram 결과를 그대로 낸다.
+    SEARCH_SPLIT_SOURCES 면 후보를 넉넉히 모아 법령·자치법규를 limit 개씩 나눠 법령부터 담는다."""
+    s = get_settings()
+    split = s.search_split_sources and not region      # 지역을 주면 조례만 찾는다
+    want = limit * SPLIT_POOL if split else limit
+    base = _run_law_search(store, query, scope, region, want)
+    if base["status"] != "ok":
+        return base
+    rows = base["facts"].get("결과", [])
+    found = None if s.search_method == "trigram" else _words_rows(store, query, scope, region, want * 2)
+    if found is not None and s.search_method == "words":
+        rows = found or rows
+    elif found is not None:   # hybrid
+        score, row = {}, {}
+        for lst in (rows, found):
+            for i, r in enumerate(lst):
+                k = (r["law"], r["article"])
+                score[k] = score.get(k, 0) + 1 / (RRF_K + i + 1)
+                row.setdefault(k, r)
+        rows = [row[k] for k in sorted(score, key=lambda k: -score[k])]
+    rows = _split_sources(store, rows, limit) if split else rows[: limit * 2]
+    return result("ok", {**base["facts"], "결과": rows}, base["message"])
+
+
+def _split_sources(store, rows: list[dict], limit: int) -> list[dict]:
+    """법령 limit 개 + 자치법규 limit 개 — 출처(doc.source)로 나눈다. 순서는 각자 안에서 그대로."""
+    src = {}
+    for r in rows:
+        if r["law"] not in src:
+            d = store._one("SELECT source FROM doc WHERE name=? LIMIT 1", (r["law"],))
+            src[r["law"]] = d["source"] if d else "law"
+    laws = [r for r in rows if src[r["law"]] != "ordin"][:limit]
+    return laws + [r for r in rows if src[r["law"]] == "ordin"][:limit]
+
+
+def _words_rows(store, query: str, scope: str, region: str | None, limit: int) -> list[dict] | None:
+    """낱말 색인으로 찾은 조문·별표 — 지역·범위 안의 것만. 색인을 못 쓰면 None."""
+    from law_mcp.engine import words
+    s = get_settings()
+    hits = words.search(s.words_db_path, query, s.words_title_weight, POOL // 5)
+    if hits is None:
+        return None
+    docs = None
+    if region:
+        reg, _ = resolve_region(store, region)
+        docs = {d["doc_id"] for d in store.ordin_docs_of(reg["doc_id"])} if reg else set()
+    source = "ordin" if region else (None if scope == "all" else scope)
+    kept = []
+    for h in hits:
+        d = store._one(("SELECT d.doc_id, d.source FROM unit u JOIN doc d ON d.doc_id=u.doc_id WHERE u.unit_id=?"
+                        if h["kind"] == "u" else
+                        "SELECT d.doc_id, d.source FROM annex a JOIN doc d ON d.doc_id=a.doc_id WHERE a.annex_id=?"),
+                       (h["ref"],))
+        if d and (docs is None or d["doc_id"] in docs) and (source is None or d["source"] == source):
+            kept.append(h)
+        if len(kept) >= limit:
+            break
+    return _hit_rows(store, kept, query)
 
 
 def _hit_rows(store, hits, query):
