@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     vllm_base: str = "http://localhost:8000/v1"
     vllm_model: str = "gpt-oss-120b"
     vllm_api_key: str = ""
+    vllm_max_tokens: int = Field(
+        default=0, description="한 번 부를 때 출력 토큰 상한. 0 이면 보내지 않는다(서버 기본). 생각이 끝없이 길어지는 작은 모델이 "
+        "서버를 붙잡지 않게 쓴다.")
     reasoning_effort: str = Field(
         default="low",
         description="추론 강도 힌트. gpt-oss 는 추론을 끌 수 없고 강도만 조절된다 — 실측 "
@@ -131,6 +134,22 @@ class Settings(BaseSettings):
         "tool_choice=required 를 지키지 않는 서버에서 첫 라운드가 글로 답하면 인용 없는 답은 대조할 것이 없어 그대로 나간다. "
         "비우면 끈다.",
     )
+    answer_pointer_retry_text: str = Field(
+        default="", description="도구가 '열어 볼 조문 목록'이라고 표시한 칸(POINTER_KEY)에만 있고 원문을 열지 않은 인용({cites})을 "
+        "되돌리는 문장. 비우면 다른 확인 안 된 인용과 같이 ANSWER_CITE_RETRY_TEXT 로 되돌린다.")
+    plan_agent_url: str = Field(
+        default="", description="검색 계획 에이전트(A2A) 주소. 정하면 새 질문마다 먼저 계획을 받아 질문 뒤에 붙이고, "
+        "계획의 꼭 열 조문을 열었는지 답 점검 때 본다. 비우면 지금과 똑같이 동작한다.")
+    plan_timeout_sec: float = Field(default=60, description="계획을 기다리는 시간(초). 넘으면 계획 없이 진행한다.")
+    plan_key: str = Field(default="검색_계획", description="계획 에이전트 facts 에서 계획을 읽을 키이자, 결과 facts 에 계획을 남길 키.")
+    plan_intro_text: str = Field(default="", description="질문 뒤에 붙이는 계획의 첫 줄.")
+    plan_step_format: str = Field(default="{n}. {law} {article} ({relation}){must}",
+                                  description="계획 단계 한 줄 틀 — {n} {law} {article} {relation} {must}.")
+    plan_must_text: str = Field(default="", description="꼭 열 단계 줄 끝에 붙이는 말({must}).")
+    plan_stop_text: str = Field(default="", description="계획이 멈춘 곳(지역 필요 등)을 알리는 줄 — {stops}. 비우면 싣지 않는다.")
+    plan_open_window: int = Field(default=80, description="도구 결과에서 법령명 뒤 몇 글자 안에 조문 번호가 나와야 그 조문을 연 것으로 치나(공백 뺀 글자).")
+    plan_retry_text: str = Field(default="", description="꼭 열 조문을 열지 않은 답을 되돌리는 문장 — {steps}. 비우면 점검하지 않는다.")
+    progress_plan_text: str = Field(default="검색 계획을 세우는 중", description="계획을 받는 단계 알림.")
     answer_cite_retry_text: str = Field(
         default="답변에 쓴 다음 인용은 이번 대화의 도구 결과에 없습니다: {cites}. "
         "도구로 조회해 확인하거나, 확인할 수 없으면 답변에서 빼고 다시 답하세요.",
@@ -185,6 +204,13 @@ class Settings(BaseSettings):
         description="도구 결과에서 '사용자에게 묻기 전에 모델이 목록에서 골라 다시 부르라'는 표시의 키. 값은 고를 목록이 "
         "든 facts 키 이름이다. 이 결과 뒤에 모델이 다시 부르지 않고 ask_user 로 고르게 하면 한 번 돌려보낸다.")
     mention_key: str = Field(default="mention", description="도구 결과에서 '답에 꼭 나와야 할 이름'(필지에 걸린 규제 등) 목록의 키. 모델에게는 보이지 않는다.")
+    pointer_key: str = Field(
+        default="pointer", description="도구 결과 최상위에서 도구가 '원문이 아니라 열어 볼 조문의 이름만 담은 칸'이라고 표시한 "
+        "facts 키 목록의 키. 그 칸에만 나온 인용은 확인된 인용으로 치지 않는다(원문을 연 결과에 나와야 한다). 모델에게는 보이지 않는다.")
+    mention_append_text: str = Field(
+        default="", description="되돌린 뒤에도 답에 빠진 mention 이름({names})을 답 끝에 붙이는 문장. 비우면 붙이지 않는다.")
+    injected_min_chars: int = Field(
+        default=10, description="런타임이 메시지에 넣은 문장 틀의 고정 조각이 이 글자 수(공백 뺌) 이상이면, 답에 새어 나온 그 조각을 지운다.")
     mention_retry_text: str = Field(
         default="조회 결과가 답에 꼭 다루라고 표시한 다음 항목이 답변에 빠졌습니다: {names}. 조문이면 근거 표에 적고, 규제 이름이면 "
         "결론에 영향을 주는지 결과의 근거 조문으로 확인해 답변에 반영하고 다시 답하세요.",

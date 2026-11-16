@@ -1,7 +1,7 @@
 """법령·조례 전문 검색 (FTS5 trigram, 공백 제거 색인)."""
 import math
 import re
-from itertools import combinations
+from itertools import combinations, zip_longest
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -105,6 +105,45 @@ def _match_exprs(query: str, store=None) -> list[tuple[str, dict | None]]:  # di
         exprs.append(" OR ".join(f'"{t}"' for t in words))
     out = [e if isinstance(e, tuple) else (e, None) for e in exprs]
     return list({e: (e, w) for e, w in out}.values())
+
+
+DOTS = "ㆍ·"        # 법령이 나란한 말을 잇는 가운뎃점 — '노후ㆍ불량건축물'·'도시ㆍ군관리계획'
+DOT_GAP = 6        # 가운뎃점 뒤에 낀 말의 글자 수 상한
+VARIANTS = 2       # 낱말마다 쓰는 법령 용어 꼴 수
+
+
+def _query_words(query: str) -> list[str]:
+    """띄어 쓴 낱말(공백·따옴표 없앰, 끝에 붙은 조사는 뗌)."""
+    out = []
+    for tok in query.split():
+        t = nospace(tok).replace('"', "")
+        cut = next((n for n in range(len(t) - 1, 1, -1) if t[n:] in PARTICLES), len(t))
+        out.append(t[:cut])
+    return list(dict.fromkeys(w for w in out if w))
+
+
+def _term_variants(store, query: str) -> dict[str, list[str]]:
+    """질의 낱말이 법령 제목에서 가운뎃점으로 낀 말이 빠진 꼴이면 그 제목의 용어 — {낱말: [용어]}.
+
+    사람은 '노후ㆍ불량건축물'을 '노후건축물', '도시ㆍ군관리계획'을 '도시관리계획'으로 줄여 말하고, trigram 은 줄인 꼴로
+    법령 용어를 찾지 못한다. 낱말을 앞뒤(각 2글자 이상)로 갈라 법률·시행령 조문 제목에 '앞+가운뎃점…+뒤'로 든 것을
+    찾는다(그 낱말이 그대로 든 제목은 뺀다). 쓰는 법령이 많은 꼴부터."""
+    out = {}
+    tix = store._titles()
+    for w in _query_words(query):
+        if len(w) < 4:
+            continue
+        docs: dict[str, set] = {}
+        for i in range(2, len(w) - 1):
+            a, b = w[:i], w[i:]
+            rx = re.compile(re.escape(a) + f"(?:[{DOTS}][^{DOTS}]{{1,{DOT_GAP}}}?)+" + re.escape(b))
+            for doc, s in tix.execute("SELECT doc, s FROM t WHERE src='law' AND instr(s, ?) > 0 AND instr(s, ?) > 0"
+                                      " AND instr(s, ?) = 0", (a, b, w)):
+                for m in rx.finditer(s):
+                    docs.setdefault(m.group(0), set()).add(doc)
+        if docs:
+            out[w] = sorted(docs, key=lambda v: (-len(docs[v]), len(v)))[:VARIANTS]
+    return out
 
 
 def _basis_hint(store, query: str, region: str | None) -> dict | None:
@@ -289,7 +328,7 @@ def _run_law_search(store, query: str, scope: str = "all", region: str | None = 
     exprs = _match_exprs(query, store)
     if not exprs and len(nospace(query)) < 2:
         return result("failed", {}, "검색어가 너무 짧습니다. 예: '자연녹지지역 공장', '도로점용료'")
-    doc_ids = None
+    doc_ids, notes, wide = None, [], scope
     if region:
         reg, err = resolve_region(store, region)
         if err:
@@ -297,6 +336,61 @@ def _run_law_search(store, query: str, scope: str = "all", region: str | None = 
         doc_ids = [d["doc_id"] for d in store.ordin_docs_of(reg["doc_id"])]
         scope = "ordin"
     source = None if scope == "all" else scope
+    variants = _term_variants(store, query)
+
+    def find(doc_ids, source):
+        """법령이 쓰는 꼴로도 찾는다. 제 낱말이 든 조문이 더 많으면(줄인 꼴 쪽은 다른 낱말만 맞았다) 번갈아 앞에 끼우고,
+        아니면 줄인 꼴로 찾은 앞 limit 건 뒤에 둔다 — 앞 순위는 그대로."""
+        rows = _find(store, query, doc_ids, source, limit)
+        for w, vs in variants.items():
+            for v in vs:
+                found = _find(store, query.replace(w, v, 1), doc_ids, source, limit)
+                if _mentions(found, [v]) > _mentions(rows, [w]):
+                    rows = _interleave(found, rows)
+                else:
+                    rows = _unique(rows[:limit] + found + rows[limit:])
+        return rows
+
+    rows = find(doc_ids, source)
+    for w, vs in variants.items():
+        notes.append(f"법령 제목은 '{w}'을(를) {', '.join(repr(v) for v in vs)}(으)로 씁니다 — 그 용어로 찾은 조문도 담았습니다.")
+    place = nospace(region or "")     # 지역 이름은 doc_ids 가 이미 걸렀다 — 맞았는지 볼 낱말에서 뺀다
+    words = [w for w in _query_words(query) if len(w) >= 3 and w not in place]
+    if doc_ids and words and not _mentions(rows, words + [v for vs in variants.values() for v in vs]):
+        notes.append(f"지역({region}) 자치법규에는 {', '.join(repr(w) for w in words)}이(가) 든 조문이 없어 지역을 빼고 찾았습니다.")
+        rows = find(None, None if wide == "all" else wide)
+    rows = rows[: limit * 2]
+    if not rows:
+        return result("ok", {"결과": []}, f"'{query}'에 맞는 조문이 없습니다. 다른 표현(공식 용어)으로 다시 검색하세요.")
+    message = " ".join([f"{len(rows)}건. 원문과 상위·하위 근거는 호출인자로 law_article 을 부르세요."] + notes)
+    seen_text = nospace(" ".join(f"{r['law']} {r['title']} {r['snippet']}" for r in rows))
+    absent = [w for w in dict.fromkeys(nospace(t).replace('"', "") for t in query.split())
+              if len(w) >= 2 and w not in seen_text and w not in variants]
+    if absent:
+        message += (f" 검색어 중 {', '.join(repr(w) for w in absent)}은(는) 결과 조문에 나오지 않습니다. 법령은 같은 대상을"
+                    " 다른 용어로 부를 수 있으니, 결과 조문이 쓰는 용어로 바꿔 다시 검색하세요.")
+    return result("ok", {"결과": rows}, message)
+
+
+def _mentions(rows, words) -> int:
+    """낱말 중 하나라도 (법령명·제목·발췌에) 든 조문 수."""
+    return sum(any(w in nospace(f"{r['law']} {r['title']} {r['snippet']}") for w in words) for r in rows)
+
+
+def _unique(rows):
+    out: dict = {}
+    for r in rows:
+        out.setdefault((r["law"], r["article"]), r)
+    return list(out.values())
+
+
+def _interleave(first, second):
+    return _unique([r for pair in zip_longest(first, second) for r in pair if r])
+
+
+def _find(store, query, doc_ids, source, limit):
+    """정확한 식부터 찾고 모자라면 넓은 식으로 채운 뒤 제목 검색과 합친다."""
+    exprs = _match_exprs(query, store)
     rows, seen = [], set()
     for expr, weights in exprs:             # 정확한 식부터 — 모자라면 넓은 식으로 채운다
         for row in _search(store, expr, query, doc_ids, source, limit, weights):
@@ -310,18 +404,7 @@ def _run_law_search(store, query: str, scope: str = "all", region: str | None = 
     # 그 2글자 낱말이 실제로 제목에 들었을 때만 — 아니면 흔한 낱말(과태료)만 맞은 제목이 본문에서 찾은 것을 밀어낸다
     shorts = [nospace(t) for t in query.split() if len(nospace(t)) == 2]
     short = any(w in nospace(t["title"]) for w in shorts for t in titled_all)
-    rows = _merge(rows, titled_all, inside, short)
-    rows = rows[: limit * 2]
-    if not rows:
-        return result("ok", {"결과": []}, f"'{query}'에 맞는 조문이 없습니다. 다른 표현(공식 용어)으로 다시 검색하세요.")
-    message = f"{len(rows)}건. 원문과 상위·하위 근거는 호출인자로 law_article 을 부르세요."
-    seen_text = nospace(" ".join(f"{r['law']} {r['title']} {r['snippet']}" for r in rows))
-    absent = [w for w in dict.fromkeys(nospace(t).replace('"', "") for t in query.split())
-              if len(w) >= 2 and w not in seen_text]
-    if absent:
-        message += (f" 검색어 중 {', '.join(repr(w) for w in absent)}은(는) 결과 조문에 나오지 않습니다. 법령은 같은 대상을"
-                    " 다른 용어로 부를 수 있으니, 결과 조문이 쓰는 용어로 바꿔 다시 검색하세요.")
-    return result("ok", {"결과": rows}, message)
+    return _merge(rows, titled_all, inside, short)
 
 
 def _merge(rows, titled_all, inside, short):

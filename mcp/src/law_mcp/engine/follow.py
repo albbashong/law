@@ -14,6 +14,8 @@ ORDIN_DELEGATION = re.compile(r"(도시ㆍ군계획조례|도시·군계획조�
 ANNEX_REL = re.compile(r"제\s*(\d+)\s*조(?:의\s*(\d+))?(?:\s*제\s*(\d+)\s*항)?(?:\s*제\s*(\d+)\s*호)?\s*(?:관련|관계)")
 MAX_NEIGHBORS = 6
 REL_PRIORITY = {"근거조문": 0, "조례": 0, "하위": 1, "상위": 1, "의제": 2, "의제됨": 2, "인용": 3}
+# 위임 문구(법률 용어) — "대통령령으로 정한다", "조례로 정하는", "국토교통부령으로 정한다"
+DELEGATES = re.compile(r"(대통령령|총리령|[가-힣]*부령|조례|규칙)\s*(으로|로)\s*정")
 # 의제 — "…허가를 받으면 다음 각 호의 허가 등을 받은 것으로 본다" (법률 용어)
 DEEM = re.compile(r"(받은|한)\s*것으로\s*(본다|보며|보고|보아|봄)")
 DEEMED_BY_MAX = 3
@@ -31,6 +33,8 @@ class Ref:
     excerpt: str
     note: str
     relation: str
+    depth: int = 0                      # 시작에서 몇 걸음
+    parent: tuple | None = None         # 이 조문으로 이끈 조문 (doc_id, path)
 
 
 @dataclass
@@ -252,7 +256,7 @@ def _down(store, ref: Ref, region_doc_id, res: FollowResult) -> list[tuple[int, 
 
 
 def follow(store, doc_id: int, path: str, region_doc_id: int | None = None,
-           direction: str = "up", depth: int = 2) -> FollowResult:
+           direction: str = "up", depth: int = 2, neighbors: int = MAX_NEIGHBORS) -> FollowResult:
     res = FollowResult()
     start = node(store, doc_id, path)
     if not start:
@@ -278,13 +282,14 @@ def follow(store, doc_id: int, path: str, region_doc_id: int | None = None,
                 continue
             res.visited.add((nd, np))
             fresh.append((nd, np, rel, note[0] if note else ""))
-        for nd, np, rel, _ in fresh[MAX_NEIGHBORS:]:
+        for nd, np, rel, _ in fresh[neighbors:]:
             doc = store.doc(nd)
             res.more.append({"law": doc["name"], "article": np, "이유": "연결이 많아 생략"})
-        for nd, np, rel, note in fresh[:MAX_NEIGHBORS]:
+        for nd, np, rel, note in fresh[:neighbors]:
             nref = node(store, nd, np)
             if nref:
                 nref.relation = rel
                 nref.note = note
+                nref.depth, nref.parent = d + 1, (ref.doc_id, ref.path)
                 q.append((nref, d + 1))
     return res

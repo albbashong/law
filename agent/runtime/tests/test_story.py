@@ -16,7 +16,7 @@ class FakeModel:
     def __init__(self, script):
         self.script, self.seen = list(script), []
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         self.seen.append(([dict(m) for m in messages], [t["name"] for t in tools]))
         return self.script.pop(0)
 

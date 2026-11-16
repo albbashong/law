@@ -19,7 +19,7 @@ class FakeModel:
         self.script = list(script)
         self.seen = []
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         self.seen.append(list(messages))
         return self.script.pop(0)
 

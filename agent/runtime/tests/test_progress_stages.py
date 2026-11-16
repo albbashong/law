@@ -16,7 +16,7 @@ class Model:
     def __init__(self, script):
         self.script = list(script)
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         return self.script.pop(0)
 
 

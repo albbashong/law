@@ -124,3 +124,47 @@ async def test_answer_without_citations_and_no_tool_picked_is_kept(monkeypatch, 
     model = Model([NOT_PICKED, {"answer": "안녕하세요."}])
     raw = await loop.run_query("안녕?", mcp=Mcp(), model=model)
     assert raw["answer"] == "안녕하세요." and len(model.seen) == 2
+
+
+async def test_round_sent_back_for_an_unlooked_up_citation_must_call_a_tool(monkeypatch, tmp_path):
+    # 실측 2026-11-09 120b '서대문구에서 단독주택 짓으려면': 건축법 제11조를 조회 없이 인용해 되돌렸더니 조회하지 않고
+    # 다시 써서 확인 안 된 인용으로 나갔다 — 되돌린 라운드는 도구를 꼭 부르게 한다(조회 없는 답 되돌림과 같이)
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([PICKED, LOOKUP, {"answer": "제11조에 따라 허가를 받습니다."},
+                   LOOKUP, {"answer": "제25조에 따라 허가를 받습니다."}])
+    raw = await loop.run_query("산지에 집 지으려면 어떻게 해?", mcp=Mcp(), model=model)
+    assert "제11조" in model.seen[3][-1]["content"]
+    assert model.required[3] is True and model.required[4] is False
+    assert raw["answer"].startswith("제25조에 따라")
+
+
+class PointerMcp(Mcp):
+    async def call(self, name, args):
+        return {"pointer": ["핵심_조문"], "status": "ok", "facts": {"핵심_조문": ["건축법 제11조(건축허가)"]}}
+
+
+async def test_a_cite_only_in_a_list_the_tool_marked_as_pointers_is_sent_back(monkeypatch, tmp_path):
+    # 도구가 결과 최상위 POINTER_KEY 로 '열어 볼 조문 목록'이라고 표시한 칸에만 나온 조문은 원문을 열어야 인용할 수 있다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([PICKED, LOOKUP, {"answer": "제11조에 따라 허가를 받습니다."},
+                   LOOKUP, {"answer": "허가를 받습니다."}])
+    raw = await loop.run_query("산지에 집 지으려면 어떻게 해?", mcp=PointerMcp(), model=model)
+    assert "제11조" in model.seen[3][-1]["content"]
+    assert "pointer" not in model.seen[2][-1]["content"]
+    assert raw["answer"].startswith("허가를 받습니다")
+
+
+async def test_a_cite_only_in_a_pointer_list_is_sent_back_asking_to_open_it(monkeypatch, tmp_path):
+    # 실측 2026-11-10 W1: 열어 볼 목록에만 있던 건축법 제14·21·22조를 되돌렸더니 그 조문을 열지 않고 같은 building_basis 를
+    # 다시 불렀다 — 목록에만 있는 인용은 '그 조문 원문을 열라'는 문장으로 따로 되돌린다
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    monkeypatch.setattr(settings, "answer_pointer_retry_text", "목록에만 있고 원문을 안 열었음: {cites}")
+    model = Model([PICKED, LOOKUP, {"answer": "제11조와 제30조에 따라 허가를 받습니다."},
+                   LOOKUP, {"answer": "허가를 받습니다."}])
+    await loop.run_query("산지에 집 지으려면 어떻게 해?", mcp=PointerMcp(), model=model)
+    note = model.seen[3][-1]["content"]
+    assert "목록에만 있고 원문을 안 열었음: 제11조" in note
+    assert "제30조" in note and "목록에만 있고 원문을 안 열었음: 제11조, 제30조" not in note

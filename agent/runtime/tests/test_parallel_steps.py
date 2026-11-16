@@ -23,7 +23,7 @@ class Model:
         self.script, self.by_prompt = list(script), by_prompt
         self.flying, self.together, self.seen = set(), [], {}
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         system = messages[0]["content"] if messages[0]["role"] == "system" else ""
         key = next((k for k in self.by_prompt if system.startswith(k)), None)
         if key is None:

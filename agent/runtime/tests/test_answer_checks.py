@@ -140,3 +140,45 @@ def test_near_verbatim_quotes_pass_when_a_match_ratio_is_set(monkeypatch):
     monkeypatch.setattr(settings, "answer_quote_match_ratio", 0.9)
     assert loop.misquoted(near, msgs) == []
     assert loop.misquoted(made, msgs) == ["계획관리지역에서는 모든 공장을 지을 수 없다"]
+
+
+def test_a_quote_restating_the_question_is_not_a_law_quote(monkeypatch):
+    # 실측 2026-11-09 G11: 질문을 조금 바꿔 따옴표로 다시 적은 줄에 조문 번호가 있어(질문에 든 번호) 확인 안 된 인용으로 붙었다
+    monkeypatch.setattr(settings, "answer_quote_pattern", QUOTE)
+    monkeypatch.setattr(settings, "answer_quote_min_chars", 6)
+    monkeypatch.setattr(settings, "answer_quote_match_ratio", 0.9)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조(?:\s*의\s*\d+)?|별표\s*\d+")
+    msgs = [{"role": "user", "content": "국토계획법 시행령 제84조 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있어?"},
+            article("영천시 도시계획 조례", "제56조", "법 제77조 및 영 제84조에 따른 건폐율은 다음 각 호와 같다.")]
+    told = "**상황** – “국토계획법 시행령 제84조가 정하는 건폐율 규정이 영천시 조례에서는 어떻게 정해져 있는가”라는 질문입니다."
+    made = "영 제84조 “자연녹지지역의 건폐율은 모두 60퍼센트로 한다”"
+    assert loop.misquoted(told, msgs) == []
+    assert loop.misquoted(made, msgs) == ["자연녹지지역의 건폐율은 모두 60퍼센트로 한다"]
+
+
+def test_cites_only_listed_under_keys_the_tool_marked_as_pointers_are_not_grounded(monkeypatch):
+    # 실측 2026-11-09 G23: building_basis 의 핵심_조문(열어 볼 조문 목록)에 이름만 있던 건축법 제11조 등을 원문을 열지 않고
+    # 인용했는데, 이름이 도구 결과에 있어 확인된 인용으로 쳤다. 어느 칸이 목록인지는 도구가 결과에 표시한다(POINTER_KEY)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조(?:\s*의\s*\d+)?|별표\s*\d+")
+    msgs = [tool({"용도": "축사", "핵심_조문": ["건축법 제11조(건축허가)", "건축법 제14조(건축신고)"]})]
+    ans = "건축법 제11조에 따라 허가를 받습니다."
+    assert loop.ungrounded(ans, msgs) == []
+    assert loop.ungrounded(ans, msgs, pointers={"핵심_조문"}) == ["제11조"]
+    opened = msgs + [article("건축법", "제11조", "건축물을 건축하려는 자는 허가를 받아야 한다.")]
+    assert loop.ungrounded(ans, opened, pointers={"핵심_조문"}) == []
+
+
+def test_law_names_joined_with_a_middle_dot_are_checked_one_by_one(monkeypatch):
+    # 실측 2026-11-10 W3(영천시 공장): 표 첫 칸의 '법령·조례', '…법률·시행규칙', '…건축물은 영천시 도시계획 조례'를
+    # 지어낸 법령명으로 잡아 답 끝에 확인 안 된 인용으로 붙였다
+    monkeypatch.setattr(settings, "answer_law_pattern", LAW)
+    monkeypatch.setattr(settings, "answer_law_keys", "법령,law")
+    msgs = [article("가축분뇨의 관리 및 이용에 관한 법률", "제8조", "가축사육의 제한"),
+            article("가축분뇨의 관리 및 이용에 관한 법률 시행규칙", "제5조", "거리"),
+            article("영천시 도시계획 조례", "제33조", "공장")]
+    rows = ["| 법령·조례 | 내용 |", "| 가축분뇨의 관리 및 이용에 관한 법률·시행규칙 | 거리 |",
+            "| 해당 지역에서 건축할 수 있는 건축물은 영천시 도시계획 조례 | 공장 |"]
+    for row in rows:
+        assert loop.unnamed_laws(row, msgs) == [], row
+    assert loop.unnamed_laws("| 영천시 공장 조례·가축 규칙 | 내용 |", msgs) == ["영천시 공장 조례·가축 규칙"]
+

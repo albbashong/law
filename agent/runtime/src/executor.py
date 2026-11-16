@@ -10,16 +10,18 @@
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from a2a.extensions import PROGRESS, USAGE
 from a2a.store import TaskStore
 from a2a.types import Artifact, TaskState
-from config import settings
+from config import AGENT_DIR, settings
 
 #: 되묻기 상태를 나르는 도구 결과의 키. 도구가 이 키로 밝히면 되묻기로 본다.
 CLARIFY_STATUS = "clarify"
@@ -72,6 +74,23 @@ def resume_query(state: ResumeState, answer: str) -> str:
     return "\n".join(lines)
 
 
+def load_agent_query(agent_dir: Path) -> Any:
+    """설정 디렉터리에 `query.py` 가 있으면 그 `run_query` 를 쓴다(없으면 None).
+
+    모델이 도구를 고르는 루프가 아니라 정해진 순서로 일하는 에이전트(검색 계획 등)를 같은 런타임으로 띄우는 자리다 —
+    `actions.py` 와 같은 방식. A2A 계약·성형·재개는 그대로 이 실행기가 맡는다.
+    """
+    path = Path(agent_dir) / "query.py"
+    if not path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("agent_query", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, "run_query", None)
+
+
 def _accepts_context(run_query: Any) -> bool:
     """주입된 `run_query` 가 `context` 를 받는가. 서명을 못 읽으면 안 넘긴다(보수적으로)."""
     try:
@@ -93,7 +112,9 @@ class Executor:
         self._store = store
         self._states: dict[str, ResumeState] = {}
         if run_query is None or shape_result is None:      # 실제 기동 경로
-            from loop import run_query as _rq
+            _rq = load_agent_query(AGENT_DIR)
+            if _rq is None:
+                from loop import run_query as _rq
             from shape import shape_result as _sr
             run_query, shape_result = run_query or _rq, shape_result or _sr
         self._run_query = run_query

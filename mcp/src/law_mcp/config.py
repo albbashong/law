@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     facts_max_chars: int = 7600
     excerpt_chars: int = 400
     follow_depth: int = 2
+    # law_route — 열어 볼 순서: 따라갈 깊이 · 단계 상한 · '꼭 열기'로 칠 관계(follow 가 매기는 관계 이름, 쉼표)
+    route_depth: int = 3
+    route_steps_max: int = 12
+    route_must_depth: int = 2          # 꼭 열기로 칠 최대 걸음 수(시작에서)
+    route_neighbors: int = 12          # 한 조문에서 펼칠 연결 수(상하위가 많은 조문에서 다른 법령 인용이 잘리지 않게)
+    route_must_relations: str = "시작,상위,하위,조례,근거조문"
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 7017
     mcp_allowed_hosts: list[str] = []
@@ -36,8 +42,14 @@ class Settings(BaseSettings):
     # 결과를 법령·자치법규로 나눠(각 limit 개, 법령 먼저) 담는다 — 수가 10배 넘는 시군 조례가 법령 조문을 덮지 않게
     search_split_sources: bool = False
     words_title_weight: float = 10.0  # 제목 칸 가중 — 실측(자동 평가 300문항) 2·5·10 중 10 이 가장 나았다
+    # building_basis 가 붙이는 용도 분류 법률의 핵심 조문 수 — 같은 법에서 가장 많이 인용되는 조문(건축법: 허가·신고·
+    # 착공·사용승인). 0 이면 붙이지 않는다
+    core_articles: int = 4
     # 도구 결과 최상위에 두는 '답에 꼭 나와야 할 이름' 키 — 모델에게는 안 보이고 런타임이 답을 점검할 때 쓴다
     mention_key: str = "mention"
+    # 도구 결과 최상위에 두는 '원문이 아니라 열어 볼 조문 이름만 담은 facts 칸' 목록의 키 — 모델에게는 안 보이고, 런타임이
+    # 그 칸에만 나온 조문은 원문을 열기 전까지 확인된 인용으로 치지 않는다
+    pointer_key: str = "pointer"
 
 
 def get_settings() -> Settings:

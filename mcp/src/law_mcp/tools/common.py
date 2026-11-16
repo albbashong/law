@@ -1,5 +1,10 @@
 """도구 공통: 결과 봉투와 도구 주석."""
+from contextvars import ContextVar
+
 from mcp.types import ToolAnnotations
+
+# 이 요청을 보낸 쪽 — MCP URL 의 ?caller= (서버 미들웨어가 요청 동안 둔다). 추적 행에 남겨 평가가 가려 볼 수 있게.
+CALLER: ContextVar[str] = ContextVar("law_mcp_caller", default="")
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True,
                             open_world_hint=False)
@@ -48,7 +53,7 @@ def trace(tool: str, args: dict, res: dict) -> dict:
             for r in rows if isinstance(rows, list) else []:
                 if isinstance(r, dict) and r.get(key):
                     ref_texts.append([r.get("law"), r.get("article"), body(r, key)])
-        row = {"ts": time.time(), "tool": tool, "args": args, "status": res.get("status"),
+        row = {"ts": time.time(), "caller": CALLER.get(), "tool": tool, "args": args, "status": res.get("status"),
                "근거상태": facts.get("근거상태"), "refs": refs, "texts": texts, "ref_texts": ref_texts,
                "message": res.get("message")}
         with open(path, "a") as f:

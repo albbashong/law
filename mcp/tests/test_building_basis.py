@@ -288,3 +288,19 @@ def test_zone_without_a_place_not_listed(store):
 def test_unknown_zone_without_a_place(store):
     r = run_building_basis(store, "공장", zone="달나라지역")
     assert r["status"] == "failed" and "용도지역목록" in r["facts"]
+
+
+def test_region_without_zone_lists_only_the_zones_the_region_ordinance_sets(store):
+    # 실측 2026-11-09 '서대문구에서 단독주택': 서울에 없는 농림지역·보전관리지역까지 늘어놓았다 — 그 시군 도시계획
+    # 조례가 건폐율을 정한 용도지역만 남긴다
+    r = run_building_basis(store, "단독주택", region="서울특별시")
+    zones = [z for v in r["facts"]["용도지역별_허용"].values() for z in v]
+    assert "자연녹지지역" in zones and "제1종일반주거지역" in zones
+    assert not {"농림지역", "보전관리지역", "계획관리지역", "자연환경보전지역"} & set(zones)
+    assert "농림지역" in r["facts"]["조례에_없는_용도지역"]
+
+
+def test_region_whose_ordinance_sets_every_zone_keeps_them_all(store):
+    r = run_building_basis(store, "단독주택", region="영천시")
+    zones = [z for v in r["facts"]["용도지역별_허용"].values() for z in v]
+    assert "농림지역" in zones and "조례에_없는_용도지역" not in r["facts"]

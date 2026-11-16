@@ -101,3 +101,33 @@ def test_trace_keeps_text_per_ref(tmp_path, monkeypatch):
     assert ["A 시행령", "별표 1", "음식물 3만원"] in rows[0]["ref_texts"]
     assert ["A법", "제8조", "제8조 본문"] in rows[0]["ref_texts"]
     assert rows[1]["ref_texts"] == [["B법", "제2조제1호", "제2조: 다음 각 호\n1. 호 내용"]]
+
+
+def test_trace_records_caller_from_query(tmp_path, monkeypatch):
+    f = tmp_path / "c.jsonl"
+    monkeypatch.setenv("LAW_MCP_TRACE_FILE", str(f))
+    from law_mcp.tools.common import CALLER, result, trace
+    token = CALLER.set("search_plan")
+    try:
+        trace("law_search", {}, result("ok", {}, ""))
+    finally:
+        CALLER.reset(token)
+    trace("law_search", {}, result("ok", {}, ""))
+    rows = [json.loads(x) for x in f.read_text().splitlines()]
+    assert rows[0]["caller"] == "search_plan" and rows[1]["caller"] == ""
+
+
+def test_app_sets_caller_from_query_string():
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+    from law_mcp.server import with_caller
+    from law_mcp.tools.common import CALLER
+
+    async def who(_req):
+        return PlainTextResponse(CALLER.get())
+
+    client = TestClient(with_caller(Starlette(routes=[Route("/mcp", who)])))
+    assert client.get("/mcp?caller=search_plan").text == "search_plan"
+    assert client.get("/mcp").text == ""

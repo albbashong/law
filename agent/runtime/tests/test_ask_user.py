@@ -28,7 +28,7 @@ class FakeModel:
         self.seen_tools = []
         self.seen_messages = []
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         self.seen_tools.append([t["name"] for t in tools])
         self.seen_messages.append(list(messages))
         return self.script.pop(0)

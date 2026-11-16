@@ -5,11 +5,12 @@ from typing import Annotated
 from pydantic import Field
 
 from law_mcp.config import get_settings
+from law_mcp.engine.core import core_articles, upper_doc
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.follow import Ref, follow, node
 from law_mcp.engine.permits import deeming_of, development_permit, land_permits, permits_for_term, road_access
 from law_mcp.engine.rules import find_items, header_of, is_partial_item, normalize_zone, section_kind, subtype_cover
-from law_mcp.engine.uses import facility_term, match_use, names as use_names
+from law_mcp.engine.uses import USE_LAW, facility_term, match_use, names as use_names
 from law_mcp.tools.article import resolve_region
 from law_mcp.tools.common import READ_ONLY, result, trace
 from law_mcp.tools.parcel import with_regulations
@@ -113,9 +114,22 @@ def _ratios_only(store, region, zone, parcel_facts) -> dict:
                   " — 지으려는 것이 있으면 building_basis 로 찾으세요.")
 
 
-def _zones_for_use(store, use_hit: dict, only: str | None = None) -> dict:
+def _region_zones(store, region: str | None) -> list[str] | None:
+    """그 시군 도시계획 조례가 건폐율을 정한 용도지역 — 그 지역에 두는 용도지역. 시군을 못 찾거나 하나도 없으면 None."""
+    if not region:
+        return None
+    reg, err = resolve_region(store, region)
+    if err:
+        return None
+    zones = [r["zone"] for r in store._all("SELECT zone FROM zone_map ORDER BY zone")]
+    have = [z for z in zones if _ratio(store, reg["doc_id"], "건폐율", z)[1]]
+    return have or None
+
+
+def _zones_for_use(store, use_hit: dict, only: str | None = None, within: list[str] | None = None) -> dict:
     """장소 없이 용도만 물었을 때 — 시행령 별표를 용도지역마다 훑어 그 용도를 바로 열거하는 지역, 조례에 맡긴 지역,
-    일부 유형만 열거하는 지역, 열거하지 않거나 금지하는 지역으로 나눈다(시군 조례·필지는 보지 않는다)."""
+    일부 유형만 열거하는 지역, 열거하지 않거나 금지하는 지역으로 나눈다(시군 조례·필지는 보지 않는다).
+    within 이 있으면 그 용도지역만 본다."""
     ho = use_hit["ho"]
     mm = re.search(r"([가-하])목$", use_hit["label"])
     mok = mm.group(1) if mm else None
@@ -124,7 +138,7 @@ def _zones_for_use(store, use_hit: dict, only: str | None = None) -> dict:
     groups = {"시행령_허용": [], "조례로_허용_가능": [], "일부_유형만": [], "열거_안_됨_또는_금지": []}
     refs: list[Ref] = []
     for z in store._all("SELECT * FROM zone_map ORDER BY zone"):
-        if only and z["zone"] != only:
+        if (only and z["zone"] != only) or (within and z["zone"] not in within):
             continue
         annex = store.annex(enf["doc_id"], z["annex_no"])
         items = store.annex_items(annex["annex_id"]) if annex else []
@@ -216,7 +230,8 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     mok = mm.group(1) if mm else None              # 목 단위로 물었으면(일반음식점 = 제4호 자목) 목 단위로 본다
     term = (uses[0].get("term") or facility_term(uses[0]["text"]) or None) if mok else None
     if not zone:   # 장소 없이 용도만 — 어느 용도지역에서 지을 수 있는지를 시행령 별표로
-        found = _zones_for_use(store, uses[0])
+        within = _region_zones(store, region)
+        found = _zones_for_use(store, uses[0], within=within)
         extra, chain = [], list(found["refs"])
         _add_land_permits(store, land_category, chain, extra)
         for r in permits_for_term(store, [uname, use]):
@@ -227,10 +242,15 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
                  "추가검토": extra}
         if region:
             facts["시군구"] = region
+        missing = [r["zone"] for r in store._all("SELECT zone FROM zone_map ORDER BY zone") if within and r["zone"] not in within]
+        if missing:
+            facts["조례에_없는_용도지역"] = missing
         packed, over = pack(chain, s.facts_max_chars - size(facts) - 300, 300)
         facts["refs"], facts["더_볼_연결"] = packed, over[:6]
         fit(facts, s.facts_max_chars)
-        return result("ok", facts, "국토계획법 시행령 별표 기준으로 이 용도를 지을 수 있는 용도지역입니다. 조례로_허용_가능은 "
+        return result("ok", facts, ("이 시군 도시계획 조례가 건폐율을 정한 용도지역만 담았습니다(조례에_없는_용도지역은 이 지역에"
+                                    " 두지 않는 용도지역입니다). " if missing else "") +
+                      "국토계획법 시행령 별표 기준으로 이 용도를 지을 수 있는 용도지역입니다. 조례로_허용_가능은 "
                       "시군 도시계획 조례가 정하고, 일부_유형만은 열거된 유형에 해당해야 합니다. 특정 땅이면 주소(address)나 "
                       "시군구(region)+용도지역(zone)으로 다시 불러 조례·건폐율·용적률까지 확인하세요.")
     zkey = normalize_zone(zone)
@@ -422,7 +442,50 @@ def call_building_basis(store, use: str, region=None, zone=None, land_category=N
     if not (use or "").strip():
         return result("failed", {}, "use(지으려는 것)가 비었습니다. 질문에 나온 지으려는 것을 use 에 넣어 다시 부르세요."
                       " 지을 것 없이 건폐율·용적률만 물었다면 zone_ratios 를 부르세요.")
-    return with_regulations(store, run_building_basis(store, use, region, zone, land_category, address))
+    return with_aliases(store, with_core(store, with_regulations(
+        store, run_building_basis(store, use, region, zone, land_category, address))))
+
+
+def with_aliases(store, r: dict) -> dict:
+    """결과에 나온 법령의 약칭을 facts["약칭"] 에 싣는다 — 답에 약칭을 써도 조회 결과로 확인된다(law_article 과 같이)."""
+    laws: list[str] = []
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k == "law" and isinstance(x, str) and x not in laws:
+                    laws.append(x)
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    facts = r.get("facts")
+    if not isinstance(facts, dict):
+        return r
+    walk(facts)
+    names: list[str] = []
+    for law in laws:
+        doc = store.doc_named(law)
+        names += [n for n in (store.aliases(doc["doc_id"]) if doc else []) if n not in names]
+    if names:
+        facts["약칭"] = names
+        fit(facts, get_settings().facts_max_chars)
+    return r
+
+
+def with_core(store, r: dict) -> dict:
+    """용도 분류표(건축법 시행령 별표 1)를 둔 법률의 핵심 조문을 붙인다 — 절차를 물으면 단계가 된다."""
+    n = get_settings().core_articles
+    law = upper_doc(store, store.doc_named(USE_LAW)["doc_id"]) if n > 0 and r.get("status") in ("ok", "partial") else None
+    core = core_articles(store, law, n) if law else []
+    if core:
+        r["facts"]["핵심_조문"] = [f"{c.law} {c.article}({c.title})" for c in core]
+        r[get_settings().pointer_key] = ["핵심_조문"]
+        fit(r["facts"], get_settings().facts_max_chars)
+        r["message"] += (" 핵심_조문은 이 용도 분류를 둔 법률에서 다른 조문이 가장 많이 인용하는 조문(조문 순서)입니다. 짓는 절차를"
+                         " 물으면 이 조문들을 law_article 로 열어 단계로 쓰고, 절차가 아닌 조문은 쓰지 마세요.")
+    return r
 
 
 def register(mcp, get_store):

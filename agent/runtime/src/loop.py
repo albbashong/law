@@ -31,6 +31,8 @@ from typing import Any, Protocol
 
 from conditions import reversed_conditions
 from config import AGENT_DIR, PROMPT_PATH, settings
+import plan as planmod
+from plan import PLAN_MESSAGE_NAME
 import rates
 
 logger = logging.getLogger(__name__)
@@ -288,15 +290,37 @@ FACTS_LINE = "[확인된 사실] {facts}"
 FACTS_MAX_CHARS = 600
 
 
-def ungrounded(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
+def _without_keys(content: str, keys: set[str]) -> str:
+    """도구 결과(JSON)에서 그 키들을 뺀 것 — 도구가 표시한 열어 볼 조문 목록은 근거가 아니다. JSON 이 아니면 그대로."""
+    if not keys:
+        return content
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return content
+
+    def drop(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {k: drop(x) for k, x in v.items() if k not in keys}
+        if isinstance(v, list):
+            return [drop(x) for x in v]
+        return v
+
+    return json.dumps(drop(data), ensure_ascii=False)
+
+
+def ungrounded(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = (),
+               pointers: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """답변의 인용(ANSWER_CITE_PATTERN) 중 도구 결과·사용자 발화 어디에도 없는 것 (공백 무시, 번호 경계).
 
     `skip` 은 검증이 스스로 넣은 되돌림 문장 — 걸린 인용을 담고 있으므로 근거로 치지 않는다.
+    `pointers` 는 도구가 POINTER_KEY 로 '열어 볼 조문 목록'이라고 표시한 facts 키 — 그 칸은 근거로 치지 않는다.
     """
     pattern = settings.answer_cite_pattern
     if not pattern or not answer:
         return []
-    corpus = "".join(re.sub(r"\s+", "", str(m.get("content") or ""))
+    corpus = "".join(re.sub(r"\s+", "", _without_keys(str(m.get("content") or ""), pointers) if m.get("role") == "tool"
+                            else str(m.get("content") or ""))
                      for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip)
     out: list[str] = []
     for hit in re.findall(pattern, answer):
@@ -491,16 +515,26 @@ def rate_unmatched(answer: str, messages: list[dict[str, Any]], skip: tuple[str,
 
 
 def unnamed_laws(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
-    """답에 쓴 법령명(ANSWER_LAW_PATTERN) 중 도구 결과·사용자 발화에 없는 것 (공백 무시)."""
+    """답에 쓴 법령명(ANSWER_LAW_PATTERN) 중 도구 결과·사용자 발화에 없는 것 (공백 무시).
+
+    이번 대화에 나온 법령명으로 끝나면 앞말이 붙은 것으로 본다. 통째로 없으면 가운뎃점으로 이은 이름('법령·조례',
+    '…법률·시행규칙')으로 보고 조각마다 본다 — 조각이 모두 있으면 지어낸 이름이 아니다.
+    """
     pattern = settings.answer_law_pattern
     if not pattern or not answer:
         return []
     corpus = "".join(re.sub(r"\s+", "", str(m.get("content") or ""))
                      for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip)
+    known = _law_names(messages, skip)
+
+    def named(text: str) -> bool:
+        bare = re.sub(r"\s+", "", text)
+        return not bare or bare in corpus or any(k and bare.endswith(k) for k in known)
+
     out: list[str] = []
     for hit in re.findall(pattern, answer):
         name = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
-        if name and re.sub(r"\s+", "", name) not in corpus and name not in out:
+        if name and not (named(name) or all(named(p) for p in re.split(r"[·ㆍ]", name))) and name not in out:
             out.append(name)
     return out
 
@@ -562,21 +596,30 @@ def _bare(text: str) -> str:
     return re.sub(r"[^\w]|_", "", re.sub(r"\\[nrt]", " ", text))
 
 
+def _match_ratio(part: str, corpus: str) -> float:
+    """인용 조각의 글자 중 원문에서 가장 길게 겹치는 곳 둘레와 차례대로 맞는 비율(그대로 있으면 1)."""
+    if not part or part in corpus:
+        return 1.0
+    hit = SequenceMatcher(None, corpus, part, autojunk=False).find_longest_match(0, len(corpus), 0, len(part))
+    if not hit.size:
+        return 0.0
+    start = max(0, hit.a - hit.b - len(part) // 2)
+    window = corpus[start:hit.a - hit.b + len(part) + len(part) // 2]
+    return sum(b.size for b in SequenceMatcher(None, window, part, autojunk=False).get_matching_blocks()) / len(part)
+
+
 def _quoted_from(part: str, corpus: str) -> bool:
-    """인용 조각이 원문에 있는가 — 그대로 있거나, ANSWER_QUOTE_MATCH_RATIO 가 있으면 가장 길게 겹치는 곳 둘레에서
-    차례대로 맞는 글자의 비율이 그 값 이상인가."""
+    """인용 조각이 원문에 있는가 — 그대로 있거나, ANSWER_QUOTE_MATCH_RATIO 가 있으면 맞는 비율이 그 값 이상인가."""
     if part in corpus:
         return True
     ratio = settings.answer_quote_match_ratio
-    if ratio <= 0:
-        return False
-    hit = SequenceMatcher(None, corpus, part, autojunk=False).find_longest_match(0, len(corpus), 0, len(part))
-    if not hit.size:
-        return False
-    start = max(0, hit.a - hit.b - len(part) // 2)
-    window = corpus[start:hit.a - hit.b + len(part) + len(part) // 2]
-    same = sum(b.size for b in SequenceMatcher(None, window, part, autojunk=False).get_matching_blocks())
-    return same / len(part) >= ratio
+    return ratio > 0 and _match_ratio(part, corpus) >= ratio
+
+
+def _restates_user(quote: str, asked: str, found: str) -> bool:
+    """사용자 발화를 다시 적은 따옴표인가 — 글자의 과반이 사용자 발화와 맞고, 도구 결과보다 사용자 발화에 더 가깝다."""
+    mine = _match_ratio(quote, asked) if asked else 0.0
+    return mine * 2 > 1 and mine > _match_ratio(quote, found)
 
 
 def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...] = ()) -> list[str]:
@@ -588,8 +631,10 @@ def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...]
     pattern = settings.answer_quote_pattern
     if not pattern or not answer:
         return []
-    corpus = "".join(_bare(str(m.get("content") or ""))
-                     for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip)
+    seen = [m for m in messages if m.get("role") in ("tool", "user") and m.get("content") not in skip]
+    corpus = "".join(_bare(str(m.get("content") or "")) for m in seen)
+    asked = "".join(_bare(str(m.get("content") or "")) for m in seen if m.get("role") == "user")
+    found = "".join(_bare(str(m.get("content") or "")) for m in seen if m.get("role") == "tool")
     # 조문 번호(ANSWER_CITE_PATTERN)가 함께 적힌 줄의 인용만 원문 인용으로 본다 — 질문을 따옴표로 다시 적은 것은 뺀다
     lines = [ln for ln in answer.splitlines()
              if not settings.answer_cite_pattern or re.search(settings.answer_cite_pattern, ln)]
@@ -597,7 +642,8 @@ def misquoted(answer: str, messages: list[dict[str, Any]], skip: tuple[str, ...]
     for hit in re.findall(pattern, "\n".join(lines)):
         quote = (hit if isinstance(hit, str) else next((h for h in hit if h), "")).strip()
         parts = [_bare(x) for x in re.split(r"…|\.{3,}", quote)]
-        if any(len(x) >= settings.answer_quote_min_chars and not _quoted_from(x, corpus) for x in parts) and quote not in out:
+        if (any(len(x) >= settings.answer_quote_min_chars and not _quoted_from(x, corpus) for x in parts)
+                and not _restates_user(_bare(quote), asked, found) and quote not in out):
             out.append(quote)
     return out
 
@@ -608,6 +654,28 @@ def unquote(text: str, quotes: list[str]) -> str:
         for o, c in (("“", "”"), ('"', '"'), ("‘", "’")):
             text = text.replace(f"{o}{q}{c}", q)
     return text
+
+
+#: 런타임이 대화에 넣는 지시 문장 틀(이름이 _line·_retry_text 로 끝나는 설정과 아래 것) — 모델이 답에 옮겨 적으면 지운다
+_INJECTED_FIELDS = ("plan_intro_text", "plan_stop_text", "answer_no_lookup_text", "last_round_text", "require_args_text")
+
+
+def strip_injected(answer: str) -> str:
+    """런타임이 넣은 지시 문장의 고정 조각({…} 자리 사이 글)이 답에 나오면 지운다 — 작은 모델이 정리 줄을 그대로 옮겨 쓴다
+    (실측 2026-11-16 qwen3:8b). 공백은 달라도 같은 조각으로 본다."""
+    names = [n for n in type(settings).model_fields
+             if n.endswith("_line") or n.endswith("_retry_text") or n in _INJECTED_FIELDS]
+    out = answer
+    for name in names:
+        template = getattr(settings, name, "")
+        if not isinstance(template, str):
+            continue
+        for frag in re.split(r"\{[^}]*\}", template):
+            bare = re.sub(r"\s+", "", frag)
+            if len(bare) < settings.injected_min_chars:
+                continue
+            out = re.sub(r"\s*".join(map(re.escape, bare)), "", out)
+    return out if out == answer else "\n".join(line.rstrip() for line in out.split("\n"))
 
 
 def clean_answer(answer: str) -> str:
@@ -1001,6 +1069,7 @@ async def run_query(
     rounds_max: int | None = None,
     prior: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,
+    planner: Any = None,
 ) -> dict[str, Any]:
     """질의 하나를 모델-도구 루프로 돌리고 원시 결과 묶음을 돌려준다.
 
@@ -1083,6 +1152,7 @@ async def run_query(
         # 정리 단계가 먼저 부를 도구를 골랐다 = 근거를 찾아야 하는 질문 — 조회 없이 낸 답은 한 번 되돌린다
         lookup_due, lookup_sent_back, lookup_required_done = bool(lead), False, False
         mentions: list[str] = []                   # 도구가 답에 꼭 나와야 한다고 표시한 이름(필지 규제 등)
+        pointers: set[str] = set()                 # 도구가 '열어 볼 조문 목록'이라고 표시한 facts 키
 
         def done(stopped: str, answer: str = "", **extra: Any) -> dict[str, Any]:
             return {
@@ -1115,13 +1185,30 @@ async def run_query(
                 found.append(settings.restate_term_line.format(word=word, result=_for_model(res)))
             if found:
                 messages[-1] = {**messages[-1], "content": messages[-1]["content"] + "\n" + "\n".join(found)}
+        # 검색 계획 — 새 질문에만(재개는 이미 그 대화를 잇는다). 계획 줄은 근거가 아니다: cite_notes 로 대조에서 뺀다
+        plan_now: dict[str, Any] | None = None
+        if planner is None and settings.plan_agent_url:
+            async def planner(q: str) -> dict[str, Any] | None:
+                return await planmod.fetch_plan(settings.plan_agent_url, q, settings.plan_timeout_sec)
+        if planner is not None and not carried:
+            say(settings.progress_plan_text)
+            try:
+                plan_now = await planner(query)
+            except Exception as exc:  # noqa: BLE001 — 계획 실패는 답을 막지 않는다
+                logger.warning("plan failed: %s", exc)
+        plan_line = planmod.plan_text(plan_now) if plan_now else ""
+        if plan_line:
+            logger.info("plan: %d steps", len(plan_now.get("단계") or []))
+            # 따로 된 사용자 메시지로 — 질문에 이어 붙이면 근거 대조의 제외(skip, 내용 전체 일치)가 걸리지 않는다
+            messages.append({"role": "user", "name": PLAN_MESSAGE_NAME, "content": plan_line})
+            tool_results[settings.plan_key] = {"facts": {settings.plan_key: plan_now}}
         # 연결에 실패한 서버는 실패로 보고한다 — 답이 있으면 COMPLETED + errors
         # (부분 실패, 규격 4.3절).
         report_dead = getattr(mcp, "unavailable", None)
         for label, exc in (report_dead() if callable(report_dead) else {}).items():
             failures.append(_failure(label, McpUnavailable(label, exc), 1))
 
-        cite_checked = force_answer = False
+        cite_checked = force_answer = cite_lookup_due = plan_checked = False
         reviewed = 0
         # 정리 단계가 예시가 필요한 질문으로 보면 요청이 없어도 이야기로 다시 쓴다. 이때는 앞 턴 조회를 다시
         # 돌리지 않는다 — 그건 앞 답을 이야기로 해 달라는 요청(retell_as_story 호출)일 때의 일이다.
@@ -1129,7 +1216,9 @@ async def run_query(
         story_called = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
-        cite_notes: tuple[str, ...] = (work,) if work else ()
+        # 계획 줄은 근거가 아니다 — 이번 계획과, 재개로 이어 온 앞 계획 모두 대조에서 뺀다
+        cite_notes: tuple[str, ...] = ((work,) if work else ()) + tuple(
+            str(m.get("content") or "") for m in messages if m.get("name") == PLAN_MESSAGE_NAME)
         opened: list[dict[str, Any]] = list(last_calls(context)) if work else []   # 앞 턴에 연 법령도 분야를 켠다
         shown: list[str] = []
 
@@ -1185,6 +1274,10 @@ async def run_query(
                 # 조회 없이 답해 되돌린 라운드 — 문장만 붙이면 또 글로 답한다(실측 qwen3.5:9b), 도구를 꼭 부르게 한다
                 lookup_required_done = True
                 step = await model.next_step(messages, tools, require=True)
+            elif cite_lookup_due and not force_answer:
+                # 조회하지 않은 인용으로 되돌린 라운드도 — 문장만 붙이면 조회 없이 다시 쓴다(실측 2026-11-09 120b)
+                cite_lookup_due = False
+                step = await model.next_step(messages, tools, require=True)
             else:
                 step = await model.next_step(messages, [] if force_answer else tools)
             force_answer = False
@@ -1203,7 +1296,10 @@ async def run_query(
                     messages.append({"role": "assistant", "content": step["answer"]})
                     messages.append({"role": "user", "content": settings.answer_no_lookup_text})
                     continue
-                bad = ungrounded(step["answer"], messages, cite_notes)
+                bad = ungrounded(step["answer"], messages, cite_notes, pointers)
+                # 열어 볼 목록에만 있던 인용 — '그 조문 원문을 열라'고 따로 되돌린다(같은 목록 도구를 또 부르지 않게)
+                listed = ([c for c in bad if c not in ungrounded(step["answer"], messages, cite_notes)]
+                          if pointers and settings.answer_pointer_retry_text else [])
                 bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
                 bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
                 bad += [x for x in loose_unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
@@ -1215,6 +1311,10 @@ async def run_query(
                 hinted, flips = (flips, []) if review_on else ([], flips)
                 missed = [m for m in mentions if _bare(m) not in _bare(step["answer"])]
                 leaks = internal_names(step["answer"], known_tools)
+                unplanned = (planmod.unopened(plan_now, messages, pointers)
+                             if plan_now and settings.plan_retry_text else [])
+                if unplanned:
+                    logger.info("answer check: plan steps not opened=%s retry=%s", unplanned, not cite_checked)
                 if missed and not cite_checked and round_idx + 1 < rounds_max:
                     logger.info("answer check: missing mentions=%s", missed)
                 # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
@@ -1224,15 +1324,24 @@ async def run_query(
                     logger.info("answer check: internal names=%s retry=%s", leaks, not cite_checked)
                 if flips:
                     logger.info("answer check: reversed conditions=%s retry=%s", flips, not cite_checked)
-                if (bad or off or missed or leaks or flips) and not cite_checked and round_idx + 1 < rounds_max:
-                    cite_checked = True
+                # 계획 되돌림은 따로 한 번 — 인용 되돌림 기회를 함께 쓰면 계획을 따른 뒤 쓴 조회 안 한 인용이 꼬리표만 달고 나간다
+                retry_cites = bool(bad or off or missed or leaks or flips) and not cite_checked
+                retry_plan = bool(unplanned) and not plan_checked
+                if (retry_cites or retry_plan) and round_idx + 1 < rounds_max:
+                    cite_checked = cite_checked or retry_cites
+                    plan_checked = plan_checked or retry_plan
+                    unplanned = unplanned if retry_plan else []
+                    cite_lookup_due = bool(bad or unplanned)
                     say(settings.progress_check_text)
                     messages.append({"role": "assistant", "content": step["answer"]})
-                    note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(bad))] if bad else [])
+                    unseen = [c for c in bad if c not in listed]
+                    note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(unseen))] if unseen else [])
+                                    + ([settings.answer_pointer_retry_text.format(cites=", ".join(listed))] if listed else [])
                                     + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else [])
                                     + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else [])
                                     + ([settings.answer_internal_retry_text.format(names=", ".join(leaks))] if leaks else [])
                                     + ([settings.answer_condition_retry_text.format(conds="; ".join(flips))] if flips else [])
+                                    + ([settings.plan_retry_text.format(steps=", ".join(unplanned))] if unplanned else [])
                                     + ([settings.answer_retry_tail] if settings.answer_retry_tail else []))
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
@@ -1257,10 +1366,16 @@ async def run_query(
                         cite_notes += (note,)
                         messages.append({"role": "user", "content": note})
                         continue
-                answer = told = drop_internal(clean_answer(step["answer"]), leaks)
+                if unplanned:   # 답의 인용이 아니라 꼬리표는 붙이지 않는다 — 결과 facts 에만 남긴다
+                    tool_results[settings.plan_key]["facts"]["계획_미준수"] = unplanned
+                answer = told = strip_injected(drop_internal(clean_answer(step["answer"]), leaks))
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
+                # 되돌린 뒤에도 빠진 꼭 다룰 이름(필지 규제 등) — 도구가 표시한 이름을 정해진 문장으로 붙인다(작은 모델이 되돌림을 무시)
+                still = [m for m in mentions if _bare(m) not in _bare(answer)]
+                if still and settings.mention_append_text:
+                    answer += settings.mention_append_text.format(names=", ".join(still))
                 if not bad and settings.param_prompt:
                     say(settings.progress_params_text)
                 # 확인 안 된 인용이 남은 답도 이야기로 풀되, 그 인용은 쓰지 말라고 알린다(알릴 틀이 없으면 예전처럼 건너뜀)
@@ -1365,6 +1480,8 @@ async def run_query(
                     pick = None
                 if isinstance(result, Mapping) and isinstance(result.get(settings.mention_key), list):
                     mentions += [m for m in result[settings.mention_key] if isinstance(m, str) and m not in mentions]
+                if isinstance(result, Mapping) and isinstance(result.get(settings.pointer_key), list):
+                    pointers |= {k for k in result[settings.pointer_key] if isinstance(k, str)}
                 fed = _for_model(result)
                 found = result_marks(fed)
                 if found and found <= marks.get(name, set()):
@@ -1629,6 +1746,8 @@ class ModelAdapter:
         # 보내면 지원하지 않는 제공자가 400 으로 거부할 수 있다.
         if settings.reasoning_effort:
             kwargs["reasoning_effort"] = settings.reasoning_effort
+        if settings.vllm_max_tokens > 0:
+            kwargs["max_tokens"] = settings.vllm_max_tokens
         response = await client.chat.completions.create(**kwargs)
         choice = response.choices[0]
         message = choice.message
@@ -1685,6 +1804,8 @@ class ModelAdapter:
         }
         if settings.reasoning_effort:
             kwargs["reasoning_effort"] = settings.reasoning_effort
+        if settings.vllm_max_tokens > 0:
+            kwargs["max_tokens"] = settings.vllm_max_tokens
         response = await self._get_client().chat.completions.create(**kwargs)
         more = _usage_from_response(response)
         for k in usage:      # 못 읽어 글 답을 쓰더라도 이 요청의 토큰은 센다

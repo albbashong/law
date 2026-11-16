@@ -36,7 +36,7 @@ class FakeModel:
         self.script = list(script)
         self.seen = []
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         self.seen.append(list(messages))
         return self.script.pop(0)
 
@@ -278,7 +278,7 @@ class ToolsSeenModel(FakeModel):
         super().__init__(script)
         self.tools_seen = []
 
-    async def next_step(self, messages, tools):
+    async def next_step(self, messages, tools, require=False):
         self.tools_seen.append(list(tools))
         return await super().next_step(messages, tools)
 

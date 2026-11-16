@@ -41,8 +41,8 @@ def get_store() -> Store:
 
 
 def _tool_modules():
-    from law_mcp.tools import article, building_basis, definition, parcel, search, split_area, term_link
-    return (building_basis, split_area, parcel, article, search, definition, term_link)
+    from law_mcp.tools import article, building_basis, definition, parcel, route, search, split_area, term_link
+    return (building_basis, split_area, parcel, article, search, definition, term_link, route)
 
 
 def build_server() -> MCPServer:
@@ -60,6 +60,24 @@ def build_server() -> MCPServer:
     return mcp
 
 
+def with_caller(app):
+    """ASGI 감싸개 — 요청 URL 의 ?caller= 값을 요청 동안 CALLER 에 둔다(없으면 "")."""
+    from urllib.parse import parse_qs
+
+    from law_mcp.tools.common import CALLER
+
+    async def wrapped(scope, receive, send):
+        if scope.get("type") != "http":
+            return await app(scope, receive, send)
+        qs = parse_qs((scope.get("query_string") or b"").decode("utf-8", "ignore"))
+        token = CALLER.set((qs.get("caller") or [""])[0])
+        try:
+            return await app(scope, receive, send)
+        finally:
+            CALLER.reset(token)
+    return wrapped
+
+
 def build_app():
     s = get_settings()
     _store_cache.clear()
@@ -68,8 +86,9 @@ def build_app():
         security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
                                              allowed_hosts=s.mcp_allowed_hosts,
                                              allowed_origins=s.mcp_allowed_origins)
-    return build_server().streamable_http_app(stateless_http=True, host=s.mcp_host,
-                                              transport_security=security)
+    app = build_server().streamable_http_app(stateless_http=True, host=s.mcp_host,
+                                             transport_security=security)
+    return with_caller(app)
 
 
 def main():

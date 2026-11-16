@@ -64,6 +64,42 @@ def memory_of(task):
     return None
 
 
+def keep_rows(rows, ignore="search_plan", only=""):
+    """추적 행 거르기 — 검색 계획 에이전트(ignore)의 조회는 답한 쪽이 연 것이 아니다. only 를 주면 그 호출자 것만."""
+    if only:
+        return [r for r in rows if r.get("caller") == only]
+    return [r for r in rows if not (ignore and r.get("caller") == ignore)]
+
+
+def facts_of(task):
+    for a in task.get("artifacts") or []:
+        if a.get("name") == "facts":
+            return a["parts"][0].get("data") or {}
+    return {}
+
+
+def grounded_ok(task):
+    """런타임 답 점검이 꼬리표 없이 통과했나 — verification 아티팩트의 unverified 가 비었거나 아티팩트가 없다."""
+    for a in task.get("artifacts") or []:
+        if a.get("name") == "verification":
+            return not (a["parts"][0].get("data") or {}).get("unverified")
+    return True
+
+
+def plan_of(task, key):
+    f = facts_of(task)
+    steps = (f.get(key) or {}).get("단계") or []
+    return {"plan_steps": len(steps), "plan_must": sum(bool(s.get("꼭_열기")) for s in steps),
+            "plan_missed": list(f.get("계획_미준수") or [])}
+
+
+def plan_follow_rate(results):
+    must = sum(r.get("plan_must") or 0 for r in results)
+    if not must:
+        return None
+    return round(1 - sum(len(r.get("plan_missed") or []) for r in results) / must, 3)
+
+
 def turns_of(case):
     return list(case.get("turns") or [case.get("utterance", "")])
 
@@ -76,7 +112,8 @@ CITE_RX = r"(제\s*\d+\s*조(?:\s*의\s*\d+)?|별표\s*\d+(?:\s*의\s*\d+)?)"
 
 
 def cited(answer):
-    return set(re.findall(CITE_RX, answer))
+    """답의 조문·별표 번호(정규화) — '제 25조'(좁은 공백)와 '제25조'를 한 인용으로 센다."""
+    return {norm(c) for c in re.findall(CITE_RX, answer)}
 
 
 def tokens(text):
@@ -92,7 +129,7 @@ def starts_on_boundary(article, prefix):
     return not (nxt.isdigit() or nxt == "의")
 
 
-def evaluate(case, task, trace_rows):
+def evaluate(case, task, trace_rows, plan_key="검색_계획"):
     refs = [(l, a) for row in trace_rows for l, a in (row.get("refs") or []) if l and a]
     grounded = set()
     for _, a in refs:
@@ -120,6 +157,7 @@ def evaluate(case, task, trace_rows):
                     (None if not case.get("expect_basis") else False),
         "halluc_candidates": halluc, "rounds": len(trace_rows),
         "tools": [r.get("tool") for r in trace_rows], "answer": ans,
+        "grounded_ok": grounded_ok(task), **plan_of(task, plan_key),
     }
 
 
@@ -138,7 +176,7 @@ def per_case(results):
     return out
 
 
-def run_case(agent, case, trace):
+def run_case(agent, case, trace, ignore="search_plan", only=""):
     """턴을 차례로 보내고 (마지막 태스크, 대화 전체의 추적 행)을 돌려준다."""
     before = trace.read_text().count("\n") if trace.exists() else 0
     task, context_id, memory = None, None, None
@@ -147,7 +185,7 @@ def run_case(agent, case, trace):
         context_id = task.get("contextId") or context_id
         memory = memory_of(task) or memory
     rows = [json.loads(x) for x in (trace.read_text().splitlines()[before:] if trace.exists() else [])]
-    return task, rows
+    return task, keep_rows(rows, ignore, only)
 
 
 def main():
@@ -157,6 +195,10 @@ def main():
     ap.add_argument("--golden", default=str(ROOT / "eval" / "golden.yaml"))
     ap.add_argument("--only", default="")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--ignore-caller", default="search_plan", help="이 호출자의 law-mcp 조회는 채점에서 뺀다")
+    ap.add_argument("--caller", default="", help="이 호출자의 조회만 채점한다(여러 에이전트를 함께 돌릴 때)")
+    ap.add_argument("--plan-key", default="검색_계획")
+    ap.add_argument("--out", default="", help="결과 파일 이름 앞에 붙일 꼬리표")
     args = ap.parse_args()
     cases = yaml.safe_load(Path(args.golden).read_text())
     if args.only:
@@ -166,14 +208,15 @@ def main():
     results = []
     for c in [c for c in cases for _ in range(args.repeat)]:
         t0 = time.time()
-        task, rows = run_case(args.agent, c, trace)
-        r = evaluate(c, task, rows)
+        task, rows = run_case(args.agent, c, trace, args.ignore_caller, args.caller)
+        r = evaluate(c, task, rows, args.plan_key)
         r["seconds"] = round(time.time() - t0, 1)
         results.append(r)
         print(f"{r['id']}: state={r['state']} recall={r['recall']} basis={r['basis']} "
               f"rounds={r['rounds']} halluc={r['halluc_candidates']} prefix={r['prefix_ok']} "
-              f"mention={r['mention']} missing={r['missing']} {r['seconds']}s", flush=True)
-    out = ROOT / "eval" / "results" / time.strftime("%Y%m%d-%H%M%S.json")
+              f"mention={r['mention']} missing={r['missing']} grounded={r['grounded_ok']} "
+              f"plan={r['plan_must'] - len(r['plan_missed'])}/{r['plan_must']} {r['seconds']}s", flush=True)
+    out = ROOT / "eval" / "results" / ((args.out + "-" if args.out else "") + time.strftime("%Y%m%d-%H%M%S.json"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, ensure_ascii=False, indent=1))
     rec = [r["recall"] for r in results if r["recall"] is not None]
@@ -185,6 +228,9 @@ def main():
         "basis_cases": sum(1 for r in results if r["basis_ok"] is not None),
         "halluc_cases": sum(1 for r in results if r["halluc_candidates"]),
         "rounds_avg": round(sum(r["rounds"] for r in results) / len(results), 2),
+        "grounded_rate": round(sum(r["grounded_ok"] for r in results) / len(results), 3),
+        "plan_follow_rate": plan_follow_rate(results),
+        "seconds_avg": round(sum(r["seconds"] for r in results) / len(results), 1),
         "per_case": per_case(results) if args.repeat > 1 else None,
         "file": str(out)}, ensure_ascii=False, indent=1))
 
