@@ -68,6 +68,15 @@ def close_name(store, name: str, ratio: float, margin: float) -> str | None:
     return scored[0][1]
 
 
+def strip_law(article: str, *names: str) -> str:
+    """조문 칸 앞에 그 법령의 이름(「」 포함)이 붙었으면 뗀다 — 다른 이름이 붙은 것은 그대로 둔다(엉뚱한 법령의 조문을 열지 않게)."""
+    t = re.sub(r"[\s「」]", "", article or "")
+    for n in sorted({re.sub(r"[\s「」]", "", x or "") for x in names if x}, key=len, reverse=True):
+        if n and t.startswith(n) and t != n:
+            return t[len(n):]
+    return article
+
+
 def parse_article(s: str) -> str | None:
     t = re.sub(r"\s+", "", s or "")
     m = re.match(r"^별표(\d+)(?:의(\d+))?(.*)$", t)

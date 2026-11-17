@@ -46,3 +46,13 @@ def test_a_sido_name_no_longer_in_the_data_is_ignored(store):
     sidos = {r["sido"] for r in store._all("SELECT DISTINCT sido FROM region_plan")}
     assert "없어진도" not in sidos and "경상북도" in sidos
     assert find_region(store, "없어진도 영천시")[0]["name"] == "영천시 도시계획 조례"
+
+
+def test_article_with_its_own_law_name_in_front_is_read():
+    """실측 2026-11-17 qwen3:8b 가 article 에 법령명까지 넣어("도로교통법 제148조의2") 벌칙 조문을 끝내 열지 못했다 —
+    앞에 붙은 것이 그 law 의 이름일 때만 떼어 읽는다. 다른 법령 이름(시행규칙 등)이 붙었으면 읽지 않는다."""
+    from law_mcp.engine.resolve import strip_law
+    assert parse_article(strip_law("도로교통법 제148조의2", "도로교통법")) == "제148조의2"
+    assert parse_article(strip_law("「도로교통법」 제44조제1항", "도로교통법")) == "제44조/1"
+    assert parse_article(strip_law("도로교통법 시행규칙 별표 28", "도로교통법")) is None
+    assert strip_law("제71조", "도로교통법") == "제71조"

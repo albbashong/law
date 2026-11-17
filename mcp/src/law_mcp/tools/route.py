@@ -4,7 +4,7 @@ from typing import Annotated
 from pydantic import Field
 
 from law_mcp.config import get_settings
-from law_mcp.engine.resolve import parse_article
+from law_mcp.engine.resolve import parse_article, strip_law
 from law_mcp.engine.route import route
 from law_mcp.tools.article import resolve_doc, resolve_region
 from law_mcp.tools.common import READ_ONLY, result, trace
@@ -18,7 +18,7 @@ def run_law_route(store, law: str, article: str, region: str | None = None) -> d
     reg, err = resolve_region(store, region)
     if err:
         return err
-    path = parse_article(article)
+    path = parse_article(strip_law(article, law, doc.get("name")))   # 조문 칸에 법령명까지 넣어 부른 것도 읽는다
     if not path:
         return result("failed", {}, f"'{article}'을 조문·별표 번호로 읽지 못했습니다. 예: '제71조', '별표 17'")
     r = route(store, doc["doc_id"], path, reg["doc_id"] if reg else None, s.route_depth, s.route_steps_max,

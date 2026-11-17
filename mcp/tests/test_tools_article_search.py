@@ -359,3 +359,9 @@ def test_search_results_are_marked_as_a_list_to_open(store):
     r = run_law_search(store, "건폐율")
     assert r["facts"]["결과"] and r[get_settings().pointer_key] == ["결과"]
     assert "law_article" in r["message"]
+
+
+def test_article_with_the_law_name_repeated_opens(store):
+    from law_mcp.tools.article import run_law_article
+    r = run_law_article(store, "국토의 계획 및 이용에 관한 법률 시행령", "국토의 계획 및 이용에 관한 법률 시행령 제71조")
+    assert r["status"] == "ok"

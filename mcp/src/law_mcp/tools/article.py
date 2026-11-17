@@ -7,7 +7,7 @@ from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.structure import leads, structure
 from law_mcp.engine.follow import deemed_items, follow, node
-from law_mcp.engine.resolve import close_name, find_doc, find_region, name_key, parse_article, suggest
+from law_mcp.engine.resolve import close_name, find_doc, find_region, name_key, parse_article, strip_law, suggest
 from law_mcp.tools.common import READ_ONLY, candidates_result, result, trace
 
 ORIGINAL_MAX = 2500
@@ -59,7 +59,7 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     reg, err = resolve_region(store, region)
     if err:
         return err
-    path = parse_article(article)
+    path = parse_article(strip_law(article, law, doc.get("name")))   # 조문 칸에 법령명까지 넣어 부른 것도 읽는다
     if not path:
         return result("failed", {}, f"'{article}'을 조문·별표 번호로 읽지 못했습니다. 예: '제71조', '제84조제1항제16호', '별표 17 제2호 차목'")
     start = node(store, doc["doc_id"], path)
