@@ -1,4 +1,5 @@
 """필지 용도지역 확인 (브이월드) — 독립 질의에서 주소만 있을 때."""
+import re
 from typing import Annotated
 
 from pydantic import Field
@@ -39,10 +40,34 @@ REGULATION_NOTE = ("규제_근거의 규제는 용도지역 기준과 별도로 
                    " 원문으로 확인되지 않으면 '해당 여부 확인 필요'로 적으세요.")
 
 
+def road_side_text(road: str) -> str:
+    """도로접면 분류의 뜻 — 분류 이름에 든 말마다 분류표(ROAD_SIDE_TERMS)의 뜻을 잇고, 결론을 바꾸는 분류인지 덧붙인다."""
+    s = get_settings()
+    parts = [v for k, v in s.road_side_terms.items() if k in road]
+    decisive = any(k in road for k in s.road_side_decisive)
+    return " ".join(["; ".join(parts) + ".", s.road_side_note,
+                     s.road_side_decisive_text if decisive else s.road_side_check_text])
+
+
+def with_parcel_notes(res: dict) -> dict:
+    """필지를 조회한 결과 — 도로접면의 뜻을 싣고, 필지 정보의 출처를 답 끝에 붙일 줄(footer)로 둔다."""
+    s = get_settings()
+    facts = res.get("facts") or {}
+    p = facts["필지"] if isinstance(facts.get("필지"), dict) else facts
+    if not p.get("pnu"):
+        return res
+    lines = [s.source_zoning_text]
+    if p.get("도로접면"):
+        p["도로접면_설명"] = road_side_text(p["도로접면"])
+        lines.append(s.source_road_text)
+    return {**res, s.footer_key: list(dict.fromkeys([*(res.get(s.footer_key) or []), *lines]))}
+
+
 def with_regulations(store, res: dict) -> dict:
     """필지의 기타규제마다 근거 조문을 붙인다. 근거 법령이 있는 규제 이름은 답에서 빠지지 않게 런타임용 키로도 둔다."""
     from law_mcp.engine.facts import excerpt
     from law_mcp.engine.regulations import base_name, regulation_basis
+    res = with_parcel_notes(res)
     facts = res.get("facts") or {}
     p = facts["필지"] if isinstance(facts.get("필지"), dict) else facts
     names = p.get("기타규제") or []
@@ -69,10 +94,19 @@ def with_regulations(store, res: dict) -> dict:
         return res
     p["규제_근거"], p["규제_안내"] = rows, REGULATION_NOTE
     key = get_settings().mention_key
-    return {**res, key: list(dict.fromkeys([*(res.get(key) or []), *named]))}
+    kept = list(res.get(key) or [])
+    return {**res, key: kept + [n for n in dict.fromkeys(named) if n not in kept]}
+
+
+def has_lot(address: str | None) -> bool:
+    """지번(숫자)이 있는 주소인가 — 시군구·읍면동만이면 필지가 아니다(브이월드가 아무 필지나 돌려준다)."""
+    return bool(address and re.search(r"\d", address))
 
 
 def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
+    if not has_lot(address):
+        return result("failed", {}, f"'{address}'에는 지번이 없어 필지를 찾을 수 없습니다. 지번까지 적어 주세요."
+                      " 예: 경상북도 영천시 금호읍 신월리 1-51. 지역 기준만 필요하면 시군구(region)와 용도지역(zone)으로 찾으세요.")
     lookup = lookup or default_lookup
     try:
         p = lookup(address)

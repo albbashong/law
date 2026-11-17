@@ -62,30 +62,54 @@ def _bare(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def _matcher(plan: dict[str, Any], step: dict[str, Any]):
+    """그 단계의 법령명 바로 뒤(PLAN_OPEN_WINDOW 글자 안)에 그 조문 번호가 나오는지 보는 함수(공백 뺀 글에). 번호는 경계까지
+    본다(제77조 ≠ 제77조의2). 계획에 이 법령명으로 시작하는 더 긴 이름(시행령 등)이 있으면 그 이름은 먼저 지운다."""
+    names = {_bare(s.get("law") or "") for s in plan.get("단계") or []}
+    law, article = step.get("law") or "", step.get("article") or ""
+    m = re.search(settings.answer_cite_pattern, article) if settings.answer_cite_pattern else None
+    num, key = _bare(m.group(0) if m else article), _bare(law)
+    longer = sorted((n for n in names if n != key and n.startswith(key)), key=len, reverse=True)
+    rx = re.compile(re.escape(key) + r".{0,%d}?" % settings.plan_open_window + re.escape(num) + r"(?!\d|의\d)")
+
+    def seen(body: str) -> bool:
+        for n in longer:
+            body = body.replace(n, "\u0000")
+        return bool(rx.search(body))
+    return seen
+
+
+def _label(step: dict[str, Any]) -> str:
+    return f"{step.get('law') or ''} {step.get('article') or ''}"
+
+
 def unopened(plan: dict[str, Any], messages: list[dict[str, Any]], pointers: set[str]) -> list[str]:
-    """꼭 열 조문 중, 한 도구 결과(열어 볼 목록 칸 제외)에서 법령명 바로 뒤(PLAN_OPEN_WINDOW 글자 안)에 그 조문 번호가
-    나오지 않은 것. 번호는 경계까지 본다(제77조 ≠ 제77조의2). 계획에 이 법령명으로 시작하는 더 긴 이름(시행령 등)이
-    있으면 그 이름은 먼저 지운다 — 시행령 결과를 법률을 연 것으로 치지 않게."""
+    """꼭 열 조문 중, 한 도구 결과(열어 볼 목록 칸 제외)에서 그 법령·조문이 함께 나오지 않은 것(_matcher)."""
     from loop import _without_keys
 
-    names = {_bare(s.get("law") or "") for s in plan.get("단계") or []}
     bodies = [_bare(_without_keys(str(m.get("content") or ""), pointers)) for m in messages if m.get("role") == "tool"]
     out = []
     for s in plan.get("단계") or []:
-        if not s.get("꼭_열기"):
-            continue
-        law, article = s.get("law") or "", s.get("article") or ""
-        m = re.search(settings.answer_cite_pattern, article) if settings.answer_cite_pattern else None
-        num, key = _bare(m.group(0) if m else article), _bare(law)
-        longer = sorted((n for n in names if n != key and n.startswith(key)), key=len, reverse=True)
-        rx = re.compile(re.escape(key) + r".{0,%d}?" % settings.plan_open_window + re.escape(num) + r"(?!\d|의\d)")
-
-        def seen(body: str) -> bool:
-            for n in longer:
-                body = body.replace(n, "\u0000")
-            return bool(rx.search(body))
-        if not any(seen(b) for b in bodies):
-            label = f"{law} {article}"
-            if label not in out:
-                out.append(label)
+        if s.get("꼭_열기") and not any(map(_matcher(plan, s), bodies)) and _label(s) not in out:
+            out.append(_label(s))
     return out
+
+
+def unlisted(plan: dict[str, Any], answer: str, misses: list[str]) -> list[str]:
+    """연 꼭 열 조문(misses 에 없음) 중, 답이 그 법령을 다루면서(법령명이 나옴) 그 조문은 적지 않은 것 — 근거 표에서 빠진
+    위임 단계. 안 연 조문은 unopened 의 되돌림이 맡는다."""
+    said = _bare(answer)
+    out = []
+    for s in plan.get("단계") or []:
+        label = _label(s)
+        if (s.get("꼭_열기") and label not in misses and _bare(s.get("law") or "") in said
+                and not _matcher(plan, s)(said) and label not in out):
+            out.append(label)
+    return out
+
+
+def addressed(plan: dict[str, Any], misses: list[str], answer: str) -> list[str]:
+    """놓친 꼭 열 조문(unopened 의 표시) 중 그 법령명이 답에 나오는 것(공백 무시)."""
+    said = _bare(answer)
+    laws = {f"{s.get('law') or ''} {s.get('article') or ''}": _bare(s.get("law") or "") for s in plan.get("단계") or []}
+    return [m for m in misses if laws.get(m) and laws[m] in said]

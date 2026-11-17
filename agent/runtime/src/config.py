@@ -148,6 +148,12 @@ class Settings(BaseSettings):
     plan_must_text: str = Field(default="", description="꼭 열 단계 줄 끝에 붙이는 말({must}).")
     plan_stop_text: str = Field(default="", description="계획이 멈춘 곳(지역 필요 등)을 알리는 줄 — {stops}. 비우면 싣지 않는다.")
     plan_open_window: int = Field(default=80, description="도구 결과에서 법령명 뒤 몇 글자 안에 조문 번호가 나와야 그 조문을 연 것으로 치나(공백 뺀 글자).")
+    plan_list_retry_text: str = Field(
+        default="", description="연 꼭 열 조문을, 그 법령을 다룬 답이 적지 않았을 때({steps}) 되돌리는 문장 — 근거 표의 위임 단계. "
+        "계획 되돌림과 함께 한 번. 비우면 보지 않는다.")
+    disambiguation_status: str = Field(
+        default="needs_disambiguation", description="도구 결과의 status 가 이 값이고 facts.candidates 가 있으면, 그 뒤에 성공한 "
+        "조회 없이 글로 낸 답은 그 후보로 사용자에게 되묻는다(ask). 비우면 보지 않는다.")
     plan_retry_text: str = Field(default="", description="꼭 열 조문을 열지 않은 답을 되돌리는 문장 — {steps}. 비우면 점검하지 않는다.")
     progress_plan_text: str = Field(default="검색 계획을 세우는 중", description="계획을 받는 단계 알림.")
     answer_cite_retry_text: str = Field(
@@ -207,8 +213,23 @@ class Settings(BaseSettings):
     pointer_key: str = Field(
         default="pointer", description="도구 결과 최상위에서 도구가 '원문이 아니라 열어 볼 조문의 이름만 담은 칸'이라고 표시한 "
         "facts 키 목록의 키. 그 칸에만 나온 인용은 확인된 인용으로 치지 않는다(원문을 연 결과에 나와야 한다). 모델에게는 보이지 않는다.")
+    answer_closing_text: str = Field(
+        default="", description="답의 맨 끝(※ 알림·이야기 뒤)에 런타임이 붙이는 마무리 문장. 모델이 본문 끝에 비슷한 문단을 썼으면 "
+        "그 문단은 뺀다(ANSWER_CLOSING_MATCH_MIN). 비우면 붙이지도 빼지도 않는다.")
+    answer_closing_match_min: float = Field(
+        default=0.5, description="본문 마지막 문단을 마무리 문장으로 볼 글자 두 개 묶음의 겹침 비율(짧은 쪽 기준). 문단이 마무리 "
+        "문장의 두 배보다 길면 보지 않는다.")
+    hidden_tools: str = Field(
+        default="", description="MCP 서버에 있어도 이 에이전트 모델에게 주지 않는 도구(쉼표로). 계획 에이전트만 쓰는 도구 등.")
+    footer_key: str = Field(
+        default="footer", description="도구 결과에서 '답 끝에 꼭 붙일 줄'(필지 정보의 출처 등) 목록의 키. 답에 없는 줄은 답 끝에 붙인다. "
+        "모델에게는 보이지 않는다.")
     mention_append_text: str = Field(
-        default="", description="되돌린 뒤에도 답에 빠진 mention 이름({names})을 답 끝에 붙이는 문장. 비우면 붙이지 않는다.")
+        default="", description="되돌린 뒤에도 답에 빠진 mention 이름({names})을 답 끝에 붙이는 문장. 비우면 붙이지 않는다. "
+        "도구가 글자로만 준 이름(필지 규제)에 쓴다.")
+    mention_append_texts: dict[str, str] = Field(
+        default_factory=dict, description="도구가 {name, kind, label} 로 준 mention 의 종류(kind)별로, 되돌린 뒤에도 빠진 "
+        "label({names})을 답 끝에 붙이는 문장. 종류가 없으면 붙이지 않는다(되돌림만).")
     injected_min_chars: int = Field(
         default=10, description="런타임이 메시지에 넣은 문장 틀의 고정 조각이 이 글자 수(공백 뺌) 이상이면, 답에 새어 나온 그 조각을 지운다.")
     mention_retry_text: str = Field(

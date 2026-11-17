@@ -115,5 +115,5 @@ def test_land_category_brings_the_split_ban_of_the_law_defining_it(store):
 def test_parcel_land_category_is_used(store):
     from law_mcp.clients.vworld import Parcel
     p = Parcel("경상북도 영천시 어딘가 1", "4723000000100010000", "경상북도", "영천시", ["자연녹지지역"], land_category="답")
-    f = run_split_area(store, address="x", parcel_lookup=lambda a: p)["facts"]
+    f = run_split_area(store, address="영천시 신월리 1-51", parcel_lookup=lambda a: p)["facts"]
     assert any(x.startswith("농지법 제22조") for x in f["지목_분할제한"])

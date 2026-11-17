@@ -2,6 +2,7 @@
 
 도구 모듈은 ``register(mcp, get_store) -> None`` 계약을 지킨다.
 """
+import logging
 from importlib.metadata import version as _pkg_version
 
 import uvicorn
@@ -91,7 +92,13 @@ def build_app():
     return with_caller(app)
 
 
+def quiet_http_logs() -> None:
+    """httpx 의 요청 로그(INFO, URL 전체)를 끈다 — 브이월드 API 키가 쿼리 문자열로 들어가 로그 파일에 남는다."""
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def main():
+    quiet_http_logs()
     s = get_settings()
     uvicorn.run(build_app(), host=s.mcp_host, port=s.mcp_port)
 

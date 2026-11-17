@@ -21,3 +21,11 @@ def test_store_basic(store):
     assert store.unit(did, "제84조/1/16")["label"] == "제84조제1항제16호"
     assert store.zone("자연녹지지역")["annex_no"] == "17"
     assert store.annex(did, "17")["title"].startswith("자연녹지지역")
+
+
+def test_http_client_logs_do_not_record_request_urls():
+    """브이월드 요청 URL 에 API 키가 쿼리로 들어간다 — httpx 의 INFO 요청 로그를 끄지 않으면 로그 파일에 키가 남는다."""
+    import logging
+    from law_mcp.server import quiet_http_logs
+    quiet_http_logs()
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)

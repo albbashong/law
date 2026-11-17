@@ -215,6 +215,9 @@ def run_law_search(store, query: str, scope: str = "all", region: str | None = N
     if d:
         r["facts"]["용어_정의"] = d
         r["message"] += f" 용어 '{d['args']['term']}'의 뜻은 law_definition 으로 정의 조문을 바로 찾을 수 있습니다."
+    if r["facts"].get("결과"):   # 발췌일 뿐 — 원문을 연 결과에 나와야 확인된 인용이다(런타임이 대조에서 뺀다)
+        r[get_settings().pointer_key] = ["결과"]
+        r["message"] += " 결과의 발췌는 원문이 아닙니다. 답에 쓸 조문은 호출인자로 law_article 을 불러 원문을 확인한 뒤 인용하세요."
     return r
 
 

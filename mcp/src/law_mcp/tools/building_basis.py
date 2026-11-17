@@ -83,6 +83,21 @@ def _item_ref(store, doc_id, no, item, note) -> Ref:  # 시행령 별표 항목
     return r
 
 
+REVIEW_ARTICLE = re.compile(r"\(([^()]*?)\s*(제\d+조(?:의\d+)?|별표\s*\d+(?:의\d+)?)(?:제\d+[항호][^()]*)?\)")
+
+
+def review_marks(extra: list[str]) -> list[dict]:
+    """추가검토 항목을 답에 꼭 나올 이름으로 — 이름은 항목의 '(법령 조문)'의 조 번호(항·호는 떼어 낸다 — 답이 조까지만 적어도
+    다룬 것으로), 보일 이름은 항목 문구 그대로."""
+    kind = get_settings().mention_kind_review
+    out = []
+    for label in extra:
+        m = REVIEW_ARTICLE.search(label)
+        if m:
+            out.append({"name": m.group(2), "kind": kind, "label": label})
+    return out
+
+
 def _unknown_use(store, use) -> dict:
     # pick: 사용자가 아니라 모델이 이 목록에서 골라 다시 부를 것 — 런타임이 되묻기를 한 번 돌려보낸다
     return {"pick": "용도목록", **result("failed", {"용도목록": use_names(store)},
@@ -184,6 +199,9 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
                        parcel_lookup=None) -> dict:
     s = get_settings()
     parcel_facts = None
+    from law_mcp.tools.parcel import has_lot
+    if address and not has_lot(address):   # 지번 없는 주소는 필지가 아니다 — 지역으로 쓴다(실측: region 값을 address 에도 넣음)
+        region, address = region or address, None
     if address:
         from law_mcp.tools.parcel import run_parcel_zoning
         pr = run_parcel_zoning(address, lookup=parcel_lookup)
@@ -242,17 +260,15 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
                  "추가검토": extra}
         if region:
             facts["시군구"] = region
-        missing = [r["zone"] for r in store._all("SELECT zone FROM zone_map ORDER BY zone") if within and r["zone"] not in within]
-        if missing:
-            facts["조례에_없는_용도지역"] = missing
+        # 그 시군 조례가 두지 않는 용도지역은 목록으로도 싣지 않는다 — 실으면 모델이 답에 늘어놓는다
+        missing = bool(within)
         packed, over = pack(chain, s.facts_max_chars - size(facts) - 300, 300)
         facts["refs"], facts["더_볼_연결"] = packed, over[:6]
         fit(facts, s.facts_max_chars)
-        return result("ok", facts, ("이 시군 도시계획 조례가 건폐율을 정한 용도지역만 담았습니다(조례에_없는_용도지역은 이 지역에"
-                                    " 두지 않는 용도지역입니다). " if missing else "") +
+        return {s.mention_key: review_marks(extra), **result("ok", facts, ("이 시군 도시계획 조례가 건폐율을 정한 용도지역만 담았습니다. " if missing else "") +
                       "국토계획법 시행령 별표 기준으로 이 용도를 지을 수 있는 용도지역입니다. 조례로_허용_가능은 "
                       "시군 도시계획 조례가 정하고, 일부_유형만은 열거된 유형에 해당해야 합니다. 특정 땅이면 주소(address)나 "
-                      "시군구(region)+용도지역(zone)으로 다시 불러 조례·건폐율·용적률까지 확인하세요.")
+                      "시군구(region)+용도지역(zone)으로 다시 불러 조례·건폐율·용적률까지 확인하세요.")}
     zkey = normalize_zone(zone)
     zm = store.zone(zkey)
     if not zm:
@@ -268,9 +284,9 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
         packed, over = pack(found["refs"] + chain, s.facts_max_chars - size(facts) - 300, 300)
         facts["refs"], facts["더_볼_연결"] = packed, over[:6]
         fit(facts, s.facts_max_chars)
-        return result("ok", facts, "국토계획법 시행령 별표 기준(전국 공통)의 이 용도지역 판정입니다. 조례로_허용_가능·일부_유형만은 "
+        return {s.mention_key: review_marks(extra), **result("ok", facts, "국토계획법 시행령 별표 기준(전국 공통)의 이 용도지역 판정입니다. 조례로_허용_가능·일부_유형만은 "
                       "시군 도시계획 조례가 더 정하므로, 특정 땅이면 시군구(region)나 주소(address)를 넣어 다시 불러 조례·"
-                      "건폐율·용적률까지 확인하세요. 판단근거의 조문은 답의 근거 표에 적으세요.")
+                      "건폐율·용적률까지 확인하세요. 판단근거의 조문은 답의 근거 표에 적으세요.")}
     reg, err = resolve_region(store, region)
     if err:
         return err
@@ -428,7 +444,8 @@ def run_building_basis(store, use: str, region: str | None = None, zone: str | N
     if not land_category:
         msg += (" 질문에 토지의 종류(지목)가 나왔다면 지목의 법정 명칭을 land_category 에 넣어 다시 부르세요"
                 " — 그 지목의 전용허가 근거가 붙습니다.")
-    marked = list(dict.fromkeys(r.article for r in deciding))[:4]
+    marked = [{"name": a, "kind": s.mention_kind_article, "label": a}
+              for a in list(dict.fromkeys(r.article for r in deciding))[:4]] + review_marks(extra)
     return {s.mention_key: marked, **result(status, facts, msg)}
 
 

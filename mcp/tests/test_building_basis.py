@@ -145,7 +145,7 @@ def test_multi_zone_lists_each_zone_and_keeps_non_zones_as_regulations(store):
     from law_mcp.clients.vworld import Parcel
     p = Parcel("영천시 어딘가", "4723000000100010000", "경상북도", "영천시",
                ["자연녹지지역", "생산녹지지역", "없는용도지역"])
-    r = run_building_basis(store, "공장", address="영천시 어딘가", parcel_lookup=lambda a: p)
+    r = run_building_basis(store, "공장", address="영천시 어딘가 1-1", parcel_lookup=lambda a: p)
     zones = {z["용도지역"]: z for z in r["facts"]["용도지역별"]}
     assert set(zones) == {"자연녹지지역", "생산녹지지역"}
     assert zones["자연녹지지역"]["근거상태"] == "조건부_허용"
@@ -252,7 +252,8 @@ def test_deciding_articles_are_marked_for_the_answer(store):
     # 판단 근거(별표 항목과 그것을 맡긴 조문)를 답에 꼭 적을 항목(mention)으로 표시한다
     from law_mcp.config import get_settings
     r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역")
-    marked = r[get_settings().mention_key]
+    s = get_settings()
+    marked = [m["name"] for m in r[s.mention_key] if m["kind"] == s.mention_kind_article]
     assert any(m.startswith("별표 17 ") for m in marked)
     assert any(m.startswith("제71조") for m in marked)
     assert r["facts"]["판단근거"] and all(" " in x for x in r["facts"]["판단근거"])
@@ -297,10 +298,48 @@ def test_region_without_zone_lists_only_the_zones_the_region_ordinance_sets(stor
     zones = [z for v in r["facts"]["용도지역별_허용"].values() for z in v]
     assert "자연녹지지역" in zones and "제1종일반주거지역" in zones
     assert not {"농림지역", "보전관리지역", "계획관리지역", "자연환경보전지역"} & set(zones)
-    assert "농림지역" in r["facts"]["조례에_없는_용도지역"]
+    # 없는 용도지역은 목록으로도 싣지 않는다 — 실으면 모델이 그것을 답에 늘어놓는다(프롬프트 규칙을 코드로)
+    assert "조례에_없는_용도지역" not in r["facts"] and "조례에_없는_용도지역" not in r["message"]
 
 
 def test_region_whose_ordinance_sets_every_zone_keeps_them_all(store):
     r = run_building_basis(store, "단독주택", region="영천시")
     zones = [z for v in r["facts"]["용도지역별_허용"].values() for z in v]
     assert "농림지역" in zones and "조례에_없는_용도지역" not in r["facts"]
+
+
+def test_address_result_explains_road_side_and_names_sources(store):
+    """도로접면 분류의 뜻과 필지 정보의 출처는 결과가 싣는다 — 모델이 프롬프트의 설명을 외워 쓰지 않게."""
+    from law_mcp.clients.vworld import Parcel
+    p = Parcel("경상북도 영천시 금호읍 신월리 1-51", "4723025028100010051", "경상북도", "영천시", ["자연녹지지역"],
+               road_side="맹지", legal_dong="경상북도 영천시 금호읍 신월리")
+    from law_mcp.config import get_settings
+    from law_mcp.tools.parcel import with_regulations
+    r = with_regulations(store, run_building_basis(store, "단독주택", address="영천시 신월리 1-51", parcel_lookup=lambda a: p))
+    s = get_settings()
+    assert s.road_side_terms["맹지"] in r["facts"]["필지"]["도로접면_설명"]
+    assert s.road_side_decisive_text in r["facts"]["필지"]["도로접면_설명"]
+    assert r[s.footer_key] == [s.source_zoning_text, s.source_road_text]
+
+
+def test_review_items_are_marked_with_their_article(store):
+    """추가검토 항목도 답에 꼭 나올 이름으로 — 이름은 그 조문 번호, 보일 이름은 추가검토 문구 그대로(종류: 추가검토)."""
+    from law_mcp.clients.vworld import Parcel
+    from law_mcp.config import get_settings
+    p = Parcel("경상북도 영천시 금호읍 신월리 1-51", "4723025028100010051", "경상북도", "영천시", ["자연녹지지역"],
+               road_side="세로한면(가)", legal_dong="경상북도 영천시 금호읍 신월리")
+    r = run_building_basis(store, "단독주택", address="영천시 신월리 1-51", parcel_lookup=lambda a: p)
+    s = get_settings()
+    review = [m for m in r[s.mention_key] if m["kind"] == s.mention_kind_review]
+    assert {m["label"] for m in review} == set(r["facts"]["추가검토"])
+    road = next(m for m in review if "건축법 제44조" in m["label"])
+    assert road["name"] == "제44조"
+
+
+def test_address_without_a_lot_number_is_not_looked_up(store):
+    """실측 2026-11-17 qwen3:8b 가 region 값 '영천시'를 address 에도 넣었다 — 브이월드가 엉뚱한 필지(보전산지)를 돌려줘
+    그 필지의 규제가 답에 붙었다. 지번(숫자) 없는 주소는 필지가 아니다: 조회하지 않고 지역으로 쓴다."""
+    def boom(a):
+        raise AssertionError("조회하면 안 됨")
+    r = run_building_basis(store, "단독주택", region="영천시", zone="자연녹지지역", address="영천시", parcel_lookup=boom)
+    assert r["status"] == "ok" and "필지" not in r["facts"]

@@ -137,6 +137,9 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
                    parcel_lookup=None, land_category: str | None = None) -> dict:
     s = get_settings()
     parcel_facts, zones = None, [zone] if zone else []
+    from law_mcp.tools.parcel import has_lot
+    if address and not has_lot(address):   # 지번 없는 주소는 필지가 아니다 — 지역으로 쓴다
+        region, address = region or address, None
     if address:
         from law_mcp.tools.parcel import run_parcel_zoning
         pr = run_parcel_zoning(address, lookup=parcel_lookup)

@@ -1046,6 +1046,15 @@ async def restated(model: Any, text: str, usage_total: dict[str, int],
     return "\n".join(lines), terms[:settings.restate_terms_max], story, follow, lead
 
 
+def restated_question(neutral: str) -> str:
+    """정리 줄들(restated 의 첫 값)에서 정리된 질문만 — RESTATE_QUESTION_LINE 틀의 앞뒤 고정 글을 떼어 낸다."""
+    first = (neutral or "").split("\n", 1)[0]
+    head, _, tail = settings.restate_question_line.partition("{question}")
+    if not first or not first.startswith(head) or not first.endswith(tail):
+        return ""
+    return first[len(head):len(first) - len(tail)].strip()
+
+
 def tool_progress(name: str, args: Mapping[str, Any] | None) -> str:
     """조회 단계 알림 — 도구의 사용자 이름(PROGRESS_TOOL_LABELS)과 비어 있지 않은 인자값."""
     try:
@@ -1127,7 +1136,8 @@ async def run_query(
                 on_progress(fraction, text)
 
         try:
-            listed, down = await mcp.list_tools(), None
+            hidden = {n.strip() for n in settings.hidden_tools.split(",") if n.strip()}
+            listed, down = [t for t in await mcp.list_tools() if t.get("name") not in hidden], None
         except McpUnavailable as exc:
             listed, down = [], exc
         if not (carried or down) and settings.restate_prompt:
@@ -1151,7 +1161,9 @@ async def run_query(
         pick_sent_back = False
         # 정리 단계가 먼저 부를 도구를 골랐다 = 근거를 찾아야 하는 질문 — 조회 없이 낸 답은 한 번 되돌린다
         lookup_due, lookup_sent_back, lookup_required_done = bool(lead), False, False
-        mentions: list[str] = []                   # 도구가 답에 꼭 나와야 한다고 표시한 이름(필지 규제 등)
+        mentions: list[dict[str, str]] = []        # 도구가 답에 꼭 나와야 한다고 표시한 이름 {name, kind, label}(필지 규제 등)
+        footers: list[str] = []                    # 도구가 답 끝에 꼭 붙이라고 표시한 줄(필지 정보의 출처 등)
+        ambiguous: list[dict[str, Any]] = []       # 마지막 조회가 고르라고 돌려준 후보 — 그 뒤 글로 낸 답은 이 후보로 되묻는다
         pointers: set[str] = set()                 # 도구가 '열어 볼 조문 목록'이라고 표시한 facts 키
 
         def done(stopped: str, answer: str = "", **extra: Any) -> dict[str, Any]:
@@ -1190,17 +1202,20 @@ async def run_query(
         if planner is None and settings.plan_agent_url:
             async def planner(q: str) -> dict[str, Any] | None:
                 return await planmod.fetch_plan(settings.plan_agent_url, q, settings.plan_timeout_sec)
-        if planner is not None and not carried:
+        # 계획은 정리된 질문으로 받는다 — 말투 섞인 원문으로 검색하면 엉뚱한 조문이 시작이 된다(실측 2026-11-16 "그러면 내가 농장을
+        # … 예시좀 들어줄래" → 나주시 시세 감면 조례). 이어지는 질문인데 정리된 질문이 없으면 대상을 몰라 계획을 받지 않는다
+        plan_question = restated_question(neutral) or ("" if work else query)
+        if planner is not None and not carried and plan_question:
             say(settings.progress_plan_text)
             try:
-                plan_now = await planner(query)
+                plan_now = await planner(plan_question)
             except Exception as exc:  # noqa: BLE001 — 계획 실패는 답을 막지 않는다
                 logger.warning("plan failed: %s", exc)
-        plan_line = planmod.plan_text(plan_now) if plan_now else ""
-        if plan_line:
+        # 계획은 첫 조회 결과 뒤에 붙인다(plan_pending) — 처음부터 보이면 모델이 정리 단계·도구 안내가 이끄는 전용 도구
+        # (building_basis·law_definition)를 건너뛰고 계획의 조문만 연다(실측 2026-11-16 120b G06·G17·G29 재현율 1.0→0)
+        plan_pending = planmod.plan_text(plan_now) if plan_now else ""
+        if plan_pending:
             logger.info("plan: %d steps", len(plan_now.get("단계") or []))
-            # 따로 된 사용자 메시지로 — 질문에 이어 붙이면 근거 대조의 제외(skip, 내용 전체 일치)가 걸리지 않는다
-            messages.append({"role": "user", "name": PLAN_MESSAGE_NAME, "content": plan_line})
             tool_results[settings.plan_key] = {"facts": {settings.plan_key: plan_now}}
         # 연결에 실패한 서버는 실패로 보고한다 — 답이 있으면 COMPLETED + errors
         # (부분 실패, 규격 4.3절).
@@ -1218,7 +1233,8 @@ async def run_query(
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
         # 계획 줄은 근거가 아니다 — 이번 계획과, 재개로 이어 온 앞 계획 모두 대조에서 뺀다
         cite_notes: tuple[str, ...] = ((work,) if work else ()) + tuple(
-            str(m.get("content") or "") for m in messages if m.get("name") == PLAN_MESSAGE_NAME)
+            str(m.get("content") or "") for m in messages if m.get("name") == PLAN_MESSAGE_NAME) + (
+            (plan_pending,) if plan_pending else ())
         opened: list[dict[str, Any]] = list(last_calls(context)) if work else []   # 앞 턴에 연 법령도 분야를 켠다
         shown: list[str] = []
 
@@ -1266,6 +1282,10 @@ async def run_query(
                 messages.append({"role": "user", "content": settings.last_round_text})
             if calls_made and messages[-1].get("role") == "tool":
                 say(settings.progress_read_text, min(round_idx / rounds_max, 1.0))
+                if plan_pending:
+                    # 따로 된 사용자 메시지로 — 질문에 이어 붙이면 근거 대조의 제외(skip, 내용 전체 일치)가 걸리지 않는다
+                    messages.append({"role": "user", "name": PLAN_MESSAGE_NAME, "content": plan_pending})
+                    plan_pending = ""
             if lead and not force_answer:
                 # 정리 단계가 고른 도구 — 첫 라운드는 그 도구 하나만 주고 꼭 부르게 한다(인자는 모델이 채운다)
                 step = await model.next_step(messages, [t for t in tools if t["name"] == lead], require=True)
@@ -1286,6 +1306,11 @@ async def run_query(
             usage_total["tokens_out"] += step_usage.get("tokens_out") or 0
 
             if "answer" in step:
+                if ambiguous and step["answer"].strip():
+                    # 후보 중 고르라는 결과 뒤 성공한 조회 없이 글로 답했다 — 그 후보로 되묻는다(번호 매긴 열거를 모델에 맡기지 않는다)
+                    logger.info("answer after candidates — asked with %d candidates", len(ambiguous))
+                    return done("ask", ask=ask_from({"question": strip_injected(clean_answer(step["answer"])),
+                                                     "candidates": ambiguous}))
                 # tool_choice=required 를 지키지 않는 서버에선 첫 라운드가 글로 답한다 — 인용이 없으면 대조할 것도 없어 그대로 나간다
                 # 정리 단계가 도구를 비웠어도 조회 없이 조문을 인용한 답은 근거가 없다 — 같은 방법으로 되돌린다
                 cites_without_lookup = bool(settings.answer_cite_pattern
@@ -1309,7 +1334,7 @@ async def run_query(
                 # 점검이 켜져 있으면 조건 대조는 점검에 넘긴다 — 곧바로 되돌리면 오탐이 옳은 문장을 고치게 한다
                 review_on = bool(settings.answer_review_prompt) and review_wanted(bool(work), calls_made)
                 hinted, flips = (flips, []) if review_on else ([], flips)
-                missed = [m for m in mentions if _bare(m) not in _bare(step["answer"])]
+                missed = [m["label"] for m in mentions if _bare(m["name"]) not in _bare(step["answer"])]
                 leaks = internal_names(step["answer"], known_tools)
                 unplanned = (planmod.unopened(plan_now, messages, pointers)
                              if plan_now and settings.plan_retry_text else [])
@@ -1326,12 +1351,19 @@ async def run_query(
                     logger.info("answer check: reversed conditions=%s retry=%s", flips, not cite_checked)
                 # 계획 되돌림은 따로 한 번 — 인용 되돌림 기회를 함께 쓰면 계획을 따른 뒤 쓴 조회 안 한 인용이 꼬리표만 달고 나간다
                 retry_cites = bool(bad or off or missed or leaks or flips) and not cite_checked
-                retry_plan = bool(unplanned) and not plan_checked
+                # 답이 다루는 법령의 꼭 열 조문만 되돌린다 — 엇나간 시작 조문의 계획이 되돌림 한 바퀴를 더 쓰게 한다(실측 G01)
+                plan_due = planmod.addressed(plan_now, unplanned, step["answer"]) if unplanned else []
+                # 연 꼭 열 조문을 그 법령을 다룬 답이 적지 않았다 — 근거 표의 위임 단계가 빠졌다(계획 되돌림과 함께 한 번)
+                gaps = (planmod.unlisted(plan_now, step["answer"], unplanned)
+                        if plan_now and settings.plan_list_retry_text else [])
+                if gaps:
+                    logger.info("answer check: plan steps opened but not in the answer=%s", gaps)
+                retry_plan = bool(plan_due or gaps) and not plan_checked
                 if (retry_cites or retry_plan) and round_idx + 1 < rounds_max:
                     cite_checked = cite_checked or retry_cites
                     plan_checked = plan_checked or retry_plan
-                    unplanned = unplanned if retry_plan else []
-                    cite_lookup_due = bool(bad or unplanned)
+                    plan_due, gaps = (plan_due, gaps) if retry_plan else ([], [])
+                    cite_lookup_due = bool(bad or plan_due)
                     say(settings.progress_check_text)
                     messages.append({"role": "assistant", "content": step["answer"]})
                     unseen = [c for c in bad if c not in listed]
@@ -1341,7 +1373,8 @@ async def run_query(
                                     + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else [])
                                     + ([settings.answer_internal_retry_text.format(names=", ".join(leaks))] if leaks else [])
                                     + ([settings.answer_condition_retry_text.format(conds="; ".join(flips))] if flips else [])
-                                    + ([settings.plan_retry_text.format(steps=", ".join(unplanned))] if unplanned else [])
+                                    + ([settings.plan_retry_text.format(steps=", ".join(plan_due))] if plan_due else [])
+                                    + ([settings.plan_list_retry_text.format(steps=", ".join(gaps))] if gaps else [])
                                     + ([settings.answer_retry_tail] if settings.answer_retry_tail else []))
                     cite_notes += (note,)
                     messages.append({"role": "user", "content": note})
@@ -1368,14 +1401,19 @@ async def run_query(
                         continue
                 if unplanned:   # 답의 인용이 아니라 꼬리표는 붙이지 않는다 — 결과 facts 에만 남긴다
                     tool_results[settings.plan_key]["facts"]["계획_미준수"] = unplanned
-                answer = told = strip_injected(drop_internal(clean_answer(step["answer"]), leaks))
+                answer = told = drop_closing(strip_injected(drop_internal(clean_answer(step["answer"]), leaks)))
                 bad += [x for x in off if x not in bad]
                 if bad and settings.answer_unverified_text:
                     answer += settings.answer_unverified_text.format(cites=", ".join(bad))
                 # 되돌린 뒤에도 빠진 꼭 다룰 이름(필지 규제 등) — 도구가 표시한 이름을 정해진 문장으로 붙인다(작은 모델이 되돌림을 무시)
-                still = [m for m in mentions if _bare(m) not in _bare(answer)]
-                if still and settings.mention_append_text:
-                    answer += settings.mention_append_text.format(names=", ".join(still))
+                still = [m for m in mentions if _bare(m["name"]) not in _bare(answer)]
+                for kind in dict.fromkeys(m["kind"] for m in still):
+                    text = settings.mention_append_texts.get(kind, "") if kind else settings.mention_append_text
+                    if text:
+                        answer += text.format(names=", ".join(m["label"] for m in still if m["kind"] == kind))
+                tail = [f for f in footers if _bare(f) not in _bare(answer)]
+                if tail:
+                    answer = answer.rstrip() + footer_text(tail)
                 if not bad and settings.param_prompt:
                     say(settings.progress_params_text)
                 # 확인 안 된 인용이 남은 답도 이야기로 풀되, 그 인용은 쓰지 말라고 알린다(알릴 틀이 없으면 예전처럼 건너뜀)
@@ -1391,6 +1429,8 @@ async def run_query(
                 if story != told:
                     answer = (settings.story_append_format.format(answer=answer, story=story)
                               if settings.story_append_format else story)
+                if settings.answer_closing_text:   # 마무리는 맨 끝 — ※ 알림·이야기 뒤
+                    answer = drop_closing(answer).rstrip() + "\n\n" + settings.answer_closing_text
                 return done("answer", answer=answer, ungrounded=bad, parameters=params)
 
             calls = _tool_calls_from_step(step)
@@ -1479,7 +1519,15 @@ async def run_query(
                 elif pick and pick[0] == name:
                     pick = None
                 if isinstance(result, Mapping) and isinstance(result.get(settings.mention_key), list):
-                    mentions += [m for m in result[settings.mention_key] if isinstance(m, str) and m not in mentions]
+                    for m in map(_mention, result[settings.mention_key]):
+                        if m and m["name"] not in {x["name"] for x in mentions}:
+                            mentions.append(m)
+                cands = (result.get("facts") or {}).get("candidates") if isinstance(result, Mapping) else None
+                ambiguous = ([c for c in cands if isinstance(c, Mapping) and c.get("label")]
+                             if settings.disambiguation_status and isinstance(cands, list)
+                             and result.get("status") == settings.disambiguation_status else [])
+                if isinstance(result, Mapping) and isinstance(result.get(settings.footer_key), list):
+                    footers += [f for f in result[settings.footer_key] if isinstance(f, str) and f not in footers]
                 if isinstance(result, Mapping) and isinstance(result.get(settings.pointer_key), list):
                     pointers |= {k for k in result[settings.pointer_key] if isinstance(k, str)}
                 fed = _for_model(result)
@@ -1661,6 +1709,36 @@ def model_view(result: Any) -> Any:
         if isinstance(facts, Mapping) and facts:
             return {key: result[key] for key in MODEL_VIEW_KEYS if key in result}
     return result
+
+
+def drop_closing(answer: str) -> str:
+    """본문 마지막 문단이 ANSWER_CLOSING_TEXT 와 비슷하면(글자 두 개 묶음 겹침) 뺀다 — 런타임이 맨 끝에 다시 붙인다."""
+    close = _bare(settings.answer_closing_text)
+    if not close:
+        return answer
+    head, sep, last = answer.rstrip().rpartition("\n\n")
+    tail = _bare(last)
+    if not sep or not tail or len(tail) > 2 * len(close):
+        return answer
+
+    def pairs(t: str) -> set[str]:
+        return {t[i:i + 2] for i in range(len(t) - 1)}
+    a, b = pairs(tail), pairs(close)
+    return head.rstrip() if a and b and len(a & b) / min(len(a), len(b)) >= settings.answer_closing_match_min else answer
+
+
+def footer_text(lines: list[str]) -> str:
+    """답 끝에 붙일 줄들 — 줄마다 문단으로(마크다운에서 한 줄 바꿈은 한 줄로 이어 보인다)."""
+    return "".join(f"\n\n{line}" for line in lines)
+
+
+def _mention(item: Any) -> dict[str, str] | None:
+    """도구가 표시한 꼭 나올 이름 — 글자면 그 이름(종류 없음), {name, kind, label} 이면 그대로(label 이 없으면 name)."""
+    if isinstance(item, str) and item:
+        return {"name": item, "kind": "", "label": item}
+    if isinstance(item, Mapping) and isinstance(item.get("name"), str) and item["name"]:
+        return {"name": item["name"], "kind": str(item.get("kind") or ""), "label": str(item.get("label") or item["name"])}
+    return None
 
 
 def _for_model(result: Any) -> str:

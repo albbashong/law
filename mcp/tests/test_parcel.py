@@ -184,14 +184,14 @@ def _fake_lookup(zones):
 
 def test_only_real_use_zones_split_the_answer(store):
     # 브이월드 '…지역' 목록에는 도시지역(대분류)·규제지역도 섞여 온다 — 용도지역으로 해석되는 것만 쓴다
-    r = run_building_basis(store, "단독주택", address="x",
+    r = run_building_basis(store, "단독주택", address="영천시 신월리 1-51",
                            parcel_lookup=_fake_lookup(["도시지역", "자연녹지지역", "(낙동강)건축허가제한지역"]))
     assert r["status"] == "ok", r["message"]
     assert r["facts"]["용도지역"] == "자연녹지지역" and "용도지역별" not in r["facts"]
 
 
 def test_unknown_use_on_a_multi_zone_parcel_still_returns_the_use_list(store):
-    r = run_building_basis(store, "노래방", address="x",
+    r = run_building_basis(store, "노래방", address="영천시 신월리 1-51",
                            parcel_lookup=_fake_lookup(["자연녹지지역", "생산녹지지역"]))
     assert r["status"] == "failed" and r["facts"]["용도목록"]
 
@@ -206,7 +206,7 @@ def _lookup_with_others(others):
 def test_parcel_regulation_gets_the_article_that_designates_it(store):
     # 기타규제 이름이 조문 제목에 그대로 나오는 법령 조문을 붙이고, 그런 규제는 답에서 빠지지 않게 런타임 키로도 둔다
     from law_mcp.tools.building_basis import run_zone_ratios
-    r = run_zone_ratios(store, address="x", parcel_lookup=_lookup_with_others(["성장관리계획구역", "소로2류(폭 8m~10m)(접합)"]))
+    r = run_zone_ratios(store, address="영천시 신월리 1-51", parcel_lookup=_lookup_with_others(["성장관리계획구역", "소로2류(폭 8m~10m)(접합)"]))
     rows = {x["규제"]: x for x in r["facts"]["필지"]["규제_근거"]}
     assert any("제75조의2" in b for b in rows["성장관리계획구역"]["근거"])
     assert "근거" not in rows["소로2류(폭 8m~10m)(접합)"]
@@ -286,7 +286,36 @@ def test_regulation_names_keep_the_deciding_articles_of_building_basis(store):
     # 건축 근거 결과의 판단근거 표시(mention)에 규제 이름을 더한다 — 덮어쓰면 판단 근거가 답에서 빠져도 모른다
     from law_mcp.tools.building_basis import run_building_basis
     from law_mcp.tools.parcel import with_regulations
-    r = with_regulations(store, run_building_basis(store, "단독주택", address="x",
+    r = with_regulations(store, run_building_basis(store, "단독주택", address="영천시 신월리 1-51",
                                                    parcel_lookup=_lookup_with_others(["성장관리계획구역"])))
     assert "성장관리계획구역" in r["mention"]
-    assert any(m.startswith("제71조") or m.startswith("별표") for m in r["mention"])
+    names = [m["name"] for m in r["mention"] if isinstance(m, dict)]
+    assert any(m.startswith("제71조") or m.startswith("별표") for m in names)
+
+
+def test_road_side_explanation_reads_each_part_of_the_class(mock_vworld):
+    """세로한면(가) — 너비 등급·접한 모양·통행 가능을 분류표(ROAD_SIDE_TERMS)로 풀고, 결론을 바꾸는 분류가 아니면 확인할 것으로."""
+    from law_mcp.config import get_settings
+    from law_mcp.tools.parcel import with_regulations
+    s = get_settings()
+    r = with_regulations(None, run_parcel_zoning("경상북도 영천시 금호읍 신월리 1-51", lookup=mock_vworld.lookup))
+    note = r["facts"]["도로접면_설명"]
+    assert all(s.road_side_terms[k] in note for k in ("세로", "한면", "(가)"))
+    assert s.road_side_note in note and s.road_side_check_text in note and s.road_side_decisive_text not in note
+    assert r[s.footer_key] == [s.source_zoning_text, s.source_road_text]
+
+
+def test_parcel_without_road_side_names_only_the_zoning_source():
+    from law_mcp.config import get_settings
+    from law_mcp.tools.parcel import with_regulations
+    s = get_settings()
+    c = vworld.Client("k", transport=_transport(landchar="vworld_landchar_denied.json"), retry_wait=0)
+    r = with_regulations(None, run_parcel_zoning("경상북도 영천시 금호읍 신월리 1-51", lookup=c.lookup))
+    assert r[s.footer_key] == [s.source_zoning_text] and "도로접면_설명" not in r["facts"]
+
+
+def test_parcel_address_without_a_lot_number_is_refused():
+    def boom(a):
+        raise AssertionError("조회하면 안 됨")
+    r = run_parcel_zoning("영천시", lookup=boom)
+    assert r["status"] == "failed" and "지번" in r["message"]

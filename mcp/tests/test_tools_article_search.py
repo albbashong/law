@@ -349,3 +349,13 @@ def test_article_lists_abbreviations_of_linked_laws_too(store):
     linked = {x["law"] for x in r["facts"]["refs"]}
     assert "국토의 계획 및 이용에 관한 법률 시행령" in linked
     assert "국토계획법시행령" in r["facts"]["약칭"]
+
+
+def test_search_results_are_marked_as_a_list_to_open(store):
+    """검색 결과는 발췌일 뿐 — 원문을 열기 전에는 확인된 근거가 아니다(pointer). 실측 2026-11-17 qwen3:8b 가 음주운전 벌칙
+    조문(도로교통법 제148조의2)을 열지 않고 검색 발췌로 표를 채워, 원문에 없는 기준(0.05%)으로 '처벌 대상이 아니다'고 답했다."""
+    from law_mcp.config import get_settings
+    from law_mcp.tools.search import run_law_search
+    r = run_law_search(store, "건폐율")
+    assert r["facts"]["결과"] and r[get_settings().pointer_key] == ["결과"]
+    assert "law_article" in r["message"]
