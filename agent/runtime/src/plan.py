@@ -96,14 +96,19 @@ def unopened(plan: dict[str, Any], messages: list[dict[str, Any]], pointers: set
 
 
 def unlisted(plan: dict[str, Any], answer: str, misses: list[str]) -> list[str]:
-    """연 꼭 열 조문(misses 에 없음) 중, 답이 그 법령을 다루면서(법령명이 나옴) 그 조문은 적지 않은 것 — 근거 표에서 빠진
-    위임 단계. 안 연 조문은 unopened 의 되돌림이 맡는다."""
+    """연 꼭 열 조문(misses 에 없음) 중, 답이 인용한 단계와 계획에서 바로 이어진(이어진: 위·아래 한 걸음) 것인데 답이 적지
+    않은 것 — 근거 표에서 빠진 위임 단계. 이어진 단계를 인용하지 않았으면 그 답과 관계없는 조문으로 본다(억지로 넣게 하지
+    않는다). 안 연 조문은 unopened 의 되돌림이 맡는다."""
     said = _bare(answer)
+    steps = plan.get("단계") or []
+    cited = {i for i, s in enumerate(steps) if _matcher(plan, s)(said)}
     out = []
-    for s in plan.get("단계") or []:
+    for i, s in enumerate(steps):
         label = _label(s)
-        if (s.get("꼭_열기") and label not in misses and _bare(s.get("law") or "") in said
-                and not _matcher(plan, s)(said) and label not in out):
+        if not s.get("꼭_열기") or i in cited or label in misses or label in out:
+            continue
+        near = {s.get("이어진")} | {k for k, t in enumerate(steps) if t.get("이어진") == i}
+        if near & cited:
             out.append(label)
     return out
 

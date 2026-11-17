@@ -246,19 +246,22 @@ async def test_plan_miss_on_a_law_the_answer_does_not_cover_is_not_sent_back():
 LIST_RETRY = "근거 표에 위임 단계가 빠졌습니다: {steps}. 근거 표에 한 줄씩 적고 다시 답하세요."
 
 
-def test_unlisted_is_an_opened_must_step_missing_from_an_answer_on_its_law(monkeypatch):
-    """연 꼭 열 조문인데, 답이 그 법령을 다루면서 그 조문을 적지 않았다 — 근거 표의 위임 단계가 빠진 것."""
+def test_unlisted_is_an_opened_must_step_next_to_a_cited_step(monkeypatch):
+    """연 꼭 열 조문 중, 답이 인용한 단계와 계획에서 바로 이어진(이어진) 것만 근거 표에서 빠진 위임 단계로 본다.
+    실측 2026-11-17 qwen3:8b: 이어짐을 보지 않자 관계없는 조문(도로교통법 제97조 등)까지 표에 억지로 넣었다."""
     monkeypatch.setattr(settings, "plan_open_window", 80)
     law = "국토의 계획 및 이용에 관한 법률"
-    assert planmod.unlisted(PLAN, f"「{law}」에 따라 답합니다.", []) == [f"{law} 제77조"]
+    assert planmod.unlisted(PLAN, f"「{law}」와 「건축법」 제2조에 따릅니다.", []) == [f"{law} 제77조"]
+    assert planmod.unlisted(PLAN, f"「{law}」에 따라 답합니다.", []) == []            # 이어진 단계를 인용하지 않음
     assert planmod.unlisted(PLAN, f"| {law} | 제77조 | 건폐율 |", []) == []
-    assert planmod.unlisted(PLAN, "건축법에 따라 답합니다.", []) == []            # 그 법령을 다루지 않는 답
-    assert planmod.unlisted(PLAN, f"「{law}」에 따라 답합니다.", [f"{law} 제77조"]) == []   # 안 연 것은 계획 되돌림이 맡는다
+    assert planmod.unlisted(PLAN, f"「{law}」와 「건축법」 제2조.", [f"{law} 제77조"]) == []   # 안 연 것은 계획 되돌림이 맡는다
 
 
 async def test_opened_step_left_out_of_the_answer_is_sent_back(monkeypatch):
     monkeypatch.setattr(settings, "plan_list_retry_text", LIST_RETRY)
-    model = Model([OPEN, LAW_ANSWER, {"answer": "국토의 계획 및 이용에 관한 법률 제77조에 따릅니다."}])
-    raw = await loop.run_query("건폐율은?", mcp=Mcp(), model=model, planner=_planner)
+    mcp = Mcp({"status": "ok", "facts": {"법령": "국토의 계획 및 이용에 관한 법률", "조문": "제77조", "원문": "건폐율 — 건축법 제2조"}})
+    model = Model([OPEN, {"answer": "국토의 계획 및 이용에 관한 법률과 건축법 제2조에 따릅니다."},
+                   {"answer": "국토의 계획 및 이용에 관한 법률 제77조에 따릅니다."}])
+    raw = await loop.run_query("건폐율은?", mcp=mcp, model=model, planner=_planner)
     assert model.seen[2][-1]["content"].startswith("근거 표에 위임 단계가 빠졌습니다: 국토의 계획 및 이용에 관한 법률 제77조")
     assert raw["answer"].startswith("국토의 계획 및 이용에 관한 법률 제77조에 따릅니다.")
