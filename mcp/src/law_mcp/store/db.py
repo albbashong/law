@@ -18,9 +18,26 @@ class Store:
         path = Path(path)
         if not path.exists():
             raise StoreUnavailable(f"법령 DB 파일이 없습니다: {path}")
-        self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self._tix, self._tix_lock, self._df, self._vocab = None, threading.Lock(), {}, False
+        self._uri = f"file:{path}?mode=ro"
+        # 연결은 스레드마다 — MCP 도구는 여러 작업 스레드에서 동시에 불리고, sqlite 연결 하나를 같이 쓰면
+        # 'bad parameter or other API misuse' 로 조회가 깨진다(실측 2026-11-19 두 에이전트 동시 law_search)
+        self._local = threading.local()
+        self.db     # 파일을 열 수 있는지 지금 확인한다
+        self._tix, self._tix_lock, self._df = None, threading.Lock(), {}
+        self._tq_lock = threading.Lock()     # 메모리 제목 색인은 연결이 하나 — 조회를 한 번에 하나씩
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        con = getattr(self._local, "con", None)
+        if con is None:
+            con = sqlite3.connect(self._uri, uri=True)
+            con.row_factory = sqlite3.Row
+            self._local.con, self._local.vocab = con, False
+        return con
+
+    def _tq(self, sql, args=()):
+        with self._tq_lock:
+            return self._titles().execute(sql, args).fetchall()
 
     def _all(self, sql, args=()):
         return [dict(r) for r in self.db.execute(sql, args)]
@@ -164,7 +181,7 @@ class Store:
     def title_df(self, word):
         """그 낱말이 든 제목 수 — 드문 낱말일수록 제목 점수를 크게 준다."""
         if word not in self._df:
-            self._df[word] = self._titles().execute("SELECT count(*) FROM t WHERE instr(s, ?) > 0", (word,)).fetchone()[0]
+            self._df[word] = self._tq("SELECT count(*) FROM t WHERE instr(s, ?) > 0", (word,))[0][0]
         return self._df[word]
 
     # 2글자 낱말 — trigram 은 3글자 조각만 색인하므로, 색인 낱말 목록에서 그 낱말로 시작하는 조각을 모아 대신 찾는다.
@@ -172,11 +189,10 @@ class Store:
         """2글자면 색인에 실제로 있는 '그 낱말+한 글자' 조각들(많이 나오는 순), 아니면 [word]."""
         if len(word) != 2:
             return [word]
-        with self._tix_lock:
-            if not self._vocab:
-                for t in ("fts_unit", "fts_annex"):
-                    self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS temp.{t}_vocab USING fts5vocab(main, {t}, row)")
-                self._vocab = True
+        if not getattr(self._local, "vocab", False):     # temp 표는 연결마다
+            for t in ("fts_unit", "fts_annex"):
+                self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS temp.{t}_vocab USING fts5vocab(main, {t}, row)")
+            self._local.vocab = True
         end = word[:-1] + chr(ord(word[-1]) + 1)
         rows = self.db.execute("SELECT term, sum(doc) n FROM (SELECT term, doc FROM temp.fts_unit_vocab WHERE term>=? AND term<?"
                                " UNION ALL SELECT term, doc FROM temp.fts_annex_vocab WHERE term>=? AND term<?)"
@@ -201,7 +217,7 @@ class Store:
         words = [w for w in dict.fromkeys(words) if w]
         if not words:
             return []
-        n = self._titles().execute("SELECT count(*) FROM t").fetchone()[0]
+        n = self._tq("SELECT count(*) FROM t")[0][0]
         weights = [round(math.log((n + 1) / (self.title_df(w) + 1)), 3) for w in words]
         score = "+".join("(instr(s, ?) > 0) * ?" for _ in words)
         sql = f"SELECT kind, ref, doc AS doc_id, src, {score} AS score FROM t WHERE score > 0"
@@ -212,7 +228,7 @@ class Store:
         if source:
             sql += " AND src=?"
             args.append(source)
-        cur = self._titles().execute(sql + " ORDER BY score DESC, src='law' DESC, length(s) LIMIT ?", args + [limit])
+        cur = self._tq(sql + " ORDER BY score DESC, src='law' DESC, length(s) LIMIT ?", args + [limit])
         return [dict(zip(("kind", "ref", "doc_id", "src", "score"), r)) for r in cur]
 
     def docs_named_in(self, text):

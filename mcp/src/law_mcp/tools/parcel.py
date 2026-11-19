@@ -41,12 +41,12 @@ REGULATION_NOTE = ("규제_근거의 규제는 용도지역 기준과 별도로 
 
 
 def road_side_text(road: str) -> str:
-    """도로접면 분류의 뜻 — 분류 이름에 든 말마다 분류표(ROAD_SIDE_TERMS)의 뜻을 잇고, 결론을 바꾸는 분류인지 덧붙인다."""
+    """도로접면 분류의 뜻 — 분류 이름에 든 말마다 분류표(terms/road_side.json)의 뜻을 잇고, 결론을 바꾸는 분류인지 덧붙인다."""
     s = get_settings()
     parts = [v for k, v in s.road_side_terms.items() if k in road]
     decisive = any(k in road for k in s.road_side_decisive)
-    return " ".join(["; ".join(parts) + ".", s.road_side_note,
-                     s.road_side_decisive_text if decisive else s.road_side_check_text])
+    return " ".join(x for x in ["; ".join(parts) + "." if parts else "", s.road_side_note,
+                                s.road_side_decisive_text if decisive else s.road_side_check_text] if x)
 
 
 def with_parcel_notes(res: dict) -> dict:
@@ -60,7 +60,7 @@ def with_parcel_notes(res: dict) -> dict:
     if p.get("도로접면"):
         p["도로접면_설명"] = road_side_text(p["도로접면"])
         lines.append(s.source_road_text)
-    return {**res, s.footer_key: list(dict.fromkeys([*(res.get(s.footer_key) or []), *lines]))}
+    return {**res, s.footer_key: list(dict.fromkeys(x for x in [*(res.get(s.footer_key) or []), *lines] if x))}
 
 
 def with_regulations(store, res: dict) -> dict:

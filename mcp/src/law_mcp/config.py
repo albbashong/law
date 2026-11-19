@@ -1,6 +1,8 @@
 """설정 — 환경변수 UPPER_SNAKE (예: ``law_db_path`` → ``LAW_DB_PATH``)."""
+import json
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -57,18 +59,24 @@ class Settings(BaseSettings):
     footer_key: str = "footer"
     # 필지 정보의 출처 — 필지를 조회한 결과는 답 끝에 이 줄을 붙인다(도로접면이 있으면 둘째 줄도)
     source_zoning_text: str = "※ 필지의 용도지역·지목은 토지이용계획 기준입니다."
-    source_road_text: str = "※ 도로접면은 토지특성 조사의 분류입니다."
-    # 토지특성 조사의 도로접면 분류표 — 분류 이름에 든 말마다 그 뜻(법정 분류 용어라 고정해 둔다)
-    road_side_terms: dict[str, str] = {
-        "광대": "광대로: 접한 도로의 너비 등급 중 가장 넓은 등급", "중로": "중로: 접한 도로의 너비 등급(광대로 다음)",
-        "소로": "소로: 접한 도로의 너비 등급(중로 다음)", "세로": "세로: 접한 도로의 너비 등급 중 가장 좁은 등급",
-        "한면": "한면: 도로에 한 면이 접한 모양", "각지": "각지: 두 도로가 만나는 모서리에 접한 모양",
-        "(가)": "(가): 자동차 통행 가능", "(불)": "(불): 자동차 통행 불가", "맹지": "맹지: 도로에 접하지 않음"}
-    road_side_note: str = "도로접면은 토지특성 조사의 분류일 뿐 접도 기준의 예외 사유가 아니며, 접한 길이·도로 지정 여부는 알 수 없습니다."
-    # 분류에 이 말이 들면 접도 기준의 결론을 바꾸는 사실이다(도로에 접하지 않음·차량 통행 불가)
-    road_side_decisive: list[str] = ["맹지", "(불)"]
-    road_side_decisive_text: str = "도로에 접하지 않거나 차량 통행이 안 되는 분류라 접도 기준의 결론을 바꾸는 사실입니다."
-    road_side_check_text: str = "접도 기준은 대지와 도로의 관계 원문의 길이·너비 기준으로 확인할 것입니다."
+    # 토지특성 조사의 도로접면 분류표와 그 설명·출처 문장 — 코드에 두지 않고 이 파일(JSON)에서 읽는다.
+    # 같은 이름의 환경변수가 있으면 그 값이 우선한다
+    road_side_path: Path = Path(__file__).resolve().parent / "terms" / "road_side.json"
+    road_side_terms: dict[str, str] = {}   # 분류 이름에 든 말 → 그 뜻
+    road_side_note: str = ""
+    road_side_decisive: list[str] = []     # 분류에 이 말이 들면 접도 기준의 결론을 바꾸는 사실
+    road_side_decisive_text: str = ""
+    road_side_check_text: str = ""
+    source_road_text: str = ""             # 도로접면이 있으면 답 끝에 붙일 출처 줄
+
+    @model_validator(mode="after")
+    def _road_side_from_file(self):
+        if self.road_side_path and self.road_side_path.is_file():
+            data = json.loads(self.road_side_path.read_text(encoding="utf-8"))
+            for k, v in data.items():
+                if k in type(self).model_fields and k not in self.model_fields_set:
+                    setattr(self, k, v)
+        return self
 
 
 def get_settings() -> Settings:

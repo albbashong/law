@@ -838,12 +838,13 @@ def review_problems(text: str, key: str | None = None) -> list[str]:
 
 
 async def answer_review(model: "ModelAdapter", question: str, answer: str, messages: list[dict[str, Any]],
-                        usage_total: dict[str, int], hints: list[str] | None = None) -> list[str]:
-    """ANSWER_REVIEW_PROMPT 로 답을 조회 원문과 대조한 고칠 점. 조회가 없거나 프롬프트가 없으면 빈 목록.
-    `hints` 는 기계 대조가 의심한 문장 — 점검 요청 뒤에 붙여 원문과 대조해 판단하게 한다."""
+                        usage_total: dict[str, int], hints: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """ANSWER_REVIEW_PROMPT 로 답을 조회 원문과 대조한 (고칠 점, 더 열 조문·별표). 조회가 없거나 프롬프트가 없으면 빈 목록.
+    `hints` 는 기계 대조가 의심한 문장 — 점검 요청 뒤에 붙여 원문과 대조해 판단하게 한다.
+    더 열 곳은 ANSWER_REVIEW_OPEN_KEY 가 있을 때만 읽는다."""
     sources = story_sources(messages)
     if not settings.answer_review_prompt or not sources:
-        return []
+        return [], []
     prompt = (AGENT_DIR / settings.answer_review_prompt).read_text(encoding="utf-8")
     step = await model.next_step([{"role": "system", "content": prompt}, {"role": "user", "content":
                                   settings.answer_review_request_text.format(question=question, answer=answer, sources=sources)
@@ -851,7 +852,9 @@ async def answer_review(model: "ModelAdapter", question: str, answer: str, messa
                                      if hints else "")}], [])
     for k in ("tokens_in", "tokens_out"):
         usage_total[k] += (step.get("usage") or {}).get(k) or 0
-    return review_problems((step.get("answer") or "").strip(), settings.answer_review_key)
+    text = (step.get("answer") or "").strip()
+    opens = review_problems(text, settings.answer_review_open_key) if settings.answer_review_open_key else []
+    return review_problems(text, settings.answer_review_key), opens
 
 
 def checked_plan(text: str, sources: str, messages: list[dict[str, Any]],
@@ -1113,6 +1116,7 @@ async def run_query(
     """
     owns_mcp = mcp is None
     owns_model = model is None
+    plan_task: asyncio.Future | None = None   # 띄워 두고 아직 받지 않은 계획 — 턴이 끝나면 거둔다
     rounds_max = settings.rounds_max if rounds_max is None else rounds_max
 
     try:
@@ -1178,6 +1182,19 @@ async def run_query(
         if down:
             failures.append(_failure(down.server, down, 1))
             return done("unavailable")
+        # 검색 계획 — 새 질문에만(재개는 이미 그 대화를 잇는다). 계획 줄은 근거가 아니다: cite_notes 로 대조에서 뺀다
+        # 계획은 첫 조회 뒤에야 보이므로 기다리지 않고 띄워 두고(용어 연계·첫 라운드와 동시에), 온 뒤 라운드에 붙인다. 답 검사에서만 기다린다(settle_plan)
+        plan_now: dict[str, Any] | None = None
+        plan_pending = ""
+        if planner is None and settings.plan_agent_url:
+            async def planner(q: str) -> dict[str, Any] | None:
+                return await planmod.fetch_plan(settings.plan_agent_url, q, settings.plan_timeout_sec)
+        # 계획은 정리된 질문으로 받는다 — 말투 섞인 원문으로 검색하면 엉뚱한 조문이 시작이 된다(실측 2026-11-16 "그러면 내가 농장을
+        # … 예시좀 들어줄래" → 나주시 시세 감면 조례). 이어지는 질문인데 정리된 질문이 없으면 대상을 몰라 계획을 받지 않는다
+        plan_question = restated_question(neutral) or ("" if work else query)
+        if planner is not None and not carried and plan_question:
+            say(settings.progress_plan_text)
+            plan_task = asyncio.ensure_future(planner(plan_question))
         tools = [*listed, ASK_USER_TOOL, *([story_tool()] if settings.story_prompt else [])]
         known_tools = {t["name"] for t in tools}
         # 정리 단계가 고른 일상어·별칭 — 모델 기억 대신 연계 자료로 확인해 이번 질문 아래에 붙인다
@@ -1197,26 +1214,6 @@ async def run_query(
                 found.append(settings.restate_term_line.format(word=word, result=_for_model(res)))
             if found:
                 messages[-1] = {**messages[-1], "content": messages[-1]["content"] + "\n" + "\n".join(found)}
-        # 검색 계획 — 새 질문에만(재개는 이미 그 대화를 잇는다). 계획 줄은 근거가 아니다: cite_notes 로 대조에서 뺀다
-        plan_now: dict[str, Any] | None = None
-        if planner is None and settings.plan_agent_url:
-            async def planner(q: str) -> dict[str, Any] | None:
-                return await planmod.fetch_plan(settings.plan_agent_url, q, settings.plan_timeout_sec)
-        # 계획은 정리된 질문으로 받는다 — 말투 섞인 원문으로 검색하면 엉뚱한 조문이 시작이 된다(실측 2026-11-16 "그러면 내가 농장을
-        # … 예시좀 들어줄래" → 나주시 시세 감면 조례). 이어지는 질문인데 정리된 질문이 없으면 대상을 몰라 계획을 받지 않는다
-        plan_question = restated_question(neutral) or ("" if work else query)
-        if planner is not None and not carried and plan_question:
-            say(settings.progress_plan_text)
-            try:
-                plan_now = await planner(plan_question)
-            except Exception as exc:  # noqa: BLE001 — 계획 실패는 답을 막지 않는다
-                logger.warning("plan failed: %s", exc)
-        # 계획은 첫 조회 결과 뒤에 붙인다(plan_pending) — 처음부터 보이면 모델이 정리 단계·도구 안내가 이끄는 전용 도구
-        # (building_basis·law_definition)를 건너뛰고 계획의 조문만 연다(실측 2026-11-16 120b G06·G17·G29 재현율 1.0→0)
-        plan_pending = planmod.plan_text(plan_now) if plan_now else ""
-        if plan_pending:
-            logger.info("plan: %d steps", len(plan_now.get("단계") or []))
-            tool_results[settings.plan_key] = {"facts": {settings.plan_key: plan_now}}
         # 연결에 실패한 서버는 실패로 보고한다 — 답이 있으면 COMPLETED + errors
         # (부분 실패, 규격 4.3절).
         report_dead = getattr(mcp, "unavailable", None)
@@ -1237,6 +1234,24 @@ async def run_query(
             (plan_pending,) if plan_pending else ())
         opened: list[dict[str, Any]] = list(last_calls(context)) if work else []   # 앞 턴에 연 법령도 분야를 켠다
         shown: list[str] = []
+
+        async def settle_plan() -> None:
+            """띄워 둔 계획을 받는다(한 번만). 계획 실패는 답을 막지 않는다."""
+            nonlocal plan_task, plan_now, plan_pending, cite_notes
+            if plan_task is None:
+                return
+            task, plan_task = plan_task, None
+            try:
+                plan_now = await task
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("plan failed: %s", exc)
+            # 계획은 첫 조회 결과 뒤에 붙인다(plan_pending) — 처음부터 보이면 모델이 정리 단계·도구 안내가 이끄는 전용 도구
+            # (building_basis·law_definition)를 건너뛰고 계획의 조문만 연다(실측 2026-11-16 120b G06·G17·G29 재현율 1.0→0)
+            plan_pending = planmod.plan_text(plan_now) if plan_now else ""
+            if plan_pending:
+                logger.info("plan: %d steps", len(plan_now.get("단계") or []))
+                tool_results[settings.plan_key] = {"facts": {settings.plan_key: plan_now}}
+                cite_notes += (plan_pending,)
 
         async def replay_last() -> None:
             """앞 턴의 조회를 다시 실행해 결과를 대화에 놓는다. 결과마다 가짜 tool_call 과 짝을 지어 둔다(짝 없는
@@ -1282,6 +1297,10 @@ async def run_query(
                 messages.append({"role": "user", "content": settings.last_round_text})
             if calls_made and messages[-1].get("role") == "tool":
                 say(settings.progress_read_text, min(round_idx / rounds_max, 1.0))
+                # 계획이 이미 와 있으면 받는다 — 아직이면 기다리지 않고 이번 라운드를 돌고, 온 뒤 라운드에 붙인다
+                await asyncio.sleep(0)      # 끝낼 수 있는 계획은 끝낼 기회를 준다
+                if plan_task is not None and plan_task.done():
+                    await settle_plan()
                 if plan_pending:
                     # 따로 된 사용자 메시지로 — 질문에 이어 붙이면 근거 대조의 제외(skip, 내용 전체 일치)가 걸리지 않는다
                     messages.append({"role": "user", "name": PLAN_MESSAGE_NAME, "content": plan_pending})
@@ -1306,6 +1325,7 @@ async def run_query(
             usage_total["tokens_out"] += step_usage.get("tokens_out") or 0
 
             if "answer" in step:
+                await settle_plan()
                 if ambiguous and step["answer"].strip():
                     # 후보 중 고르라는 결과 뒤 성공한 조회 없이 글로 답했다 — 그 후보로 되묻는다(번호 매긴 열거를 모델에 맡기지 않는다)
                     logger.info("answer after candidates — asked with %d candidates", len(ambiguous))
@@ -1389,12 +1409,16 @@ async def run_query(
                     if hinted:
                         logger.info("answer check: conditions to review=%s", hinted)
                     say(settings.progress_review_text)
-                    problems = await answer_review(model, query, step["answer"], messages, usage_total, hinted)
-                    if problems:
-                        logger.info("answer review: %s", problems)
+                    problems, opens = await answer_review(model, query, step["answer"], messages, usage_total, hinted)
+                    if problems or opens:
+                        logger.info("answer review: %s open=%s", problems, opens)
                         say(settings.progress_fix_text)
                         messages.append({"role": "assistant", "content": step["answer"]})
-                        note = settings.answer_review_retry_text.format(problems="\n".join(f"- {p}" for p in problems))
+                        note = (settings.answer_review_retry_text.format(problems="\n".join(f"- {p}" for p in problems))
+                                if problems else "")
+                        if opens:   # 글만 고치면 '내용을 알 수 없다'를 그대로 옮겨 적는다 — 조회를 꼭 하게 한다
+                            cite_lookup_due = True
+                            note = "\n".join(x for x in (settings.answer_review_open_text.format(sources=", ".join(opens)), note) if x)
                         note += ("\n" + settings.answer_retry_tail) if settings.answer_retry_tail else ""
                         cite_notes += (note,)
                         messages.append({"role": "user", "content": note})
@@ -1553,6 +1577,8 @@ async def run_query(
 
         return done("rounds")
     finally:
+        if plan_task is not None and not plan_task.done():
+            plan_task.cancel()
         if owns_mcp and mcp is not None:
             await mcp.aclose()
         if owns_model and model is not None:

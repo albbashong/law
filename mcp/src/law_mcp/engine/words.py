@@ -6,6 +6,7 @@ trigram 색인은 세 글자 조각만 보고 낱말을 모른다. 분석기는 
 import logging
 import multiprocessing as mp
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -65,14 +66,15 @@ def words(text: str) -> list[str]:
 
 
 def _open(path: Path):
-    """색인 연결 — 파일이 없거나 분석기가 없으면 None(부르는 쪽은 trigram 으로 돌아간다)."""
-    key = str(path)
+    """색인 연결 — 파일이 없거나 분석기가 없으면 None(부르는 쪽은 trigram 으로 돌아간다).
+    연결은 스레드마다 — 도구가 여러 작업 스레드에서 동시에 불린다(연결 하나를 같이 쓰면 조회가 깨진다)."""
+    key = (str(path), threading.get_ident())
     if key not in _index:
         conn = None
         if Path(path).exists():
             try:
                 _analyzer()
-                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             except Exception as e:  # noqa: BLE001 — 분석기 설치·색인 파일 문제는 검색을 멈추지 않는다
                 logger.warning("words index unavailable: %s", e)
         else:

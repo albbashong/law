@@ -121,3 +121,18 @@ def test_paragraphs_of_one_article_are_one_step(monkeypatch):
     steps = rt.route(None, 1, "제84조", None, 3, 12, MUST)["단계"]
     assert [(s["law"], s["article"]) for s in steps] == [("영", "제84조"), ("법", "제77조"), ("법", "제37조"), ("규칙", "제5조")]
     assert steps[3]["이어진"] == 1
+
+
+def test_annex_cited_by_a_must_article_is_must(monkeypatch):
+    """조문이 내용을 별표에 맡기면('별표 1에 따른 금액') 그 별표가 답이 있는 곳이다 — 같은 법령 안의 인용이어도 꼭 열기.
+    참고 단계가 인용한 별표는 그대로 참고(실측 2026-11-18 청탁금지법 시행령 제17조 → 별표 1 음식물 5만원을 안 열고 답)."""
+    from law_mcp.engine import route as rt
+    from law_mcp.engine.follow import FollowResult, Ref
+    refs = [Ref(1, "제17조", "영", "제17조", "", "가액 범위란 별표 1에 따른 금액을 말한다.", "", "시작", 0, None),
+            Ref(1, "별표1", "영", "별표 1", "", "1. 음식물: 5만원", "", "인용", 1, (1, "제17조")),
+            Ref(1, "제2조", "영", "제2조", "", "", "", "인용", 1, (1, "제17조")),
+            Ref(1, "별표2", "영", "별표 2", "", "", "", "인용", 2, (1, "제2조"))]
+    monkeypatch.setattr(rt, "follow", lambda *a, **k: FollowResult(refs=refs))
+    steps = rt.route(None, 1, "제17조", None, 3, 12, MUST)["단계"]
+    assert [(s["article"], s["꼭_열기"]) for s in steps] == [("제17조", True), ("별표 1", True), ("제2조", False), ("별표 2", False)]
+

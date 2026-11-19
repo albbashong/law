@@ -313,6 +313,12 @@ class Settings(BaseSettings):
         default=1, description="한 답을 점검하는 횟수 상한. 2 이상이면 고친 답도 다시 점검한다 — 지목된 문장을 고치며 다른 "
         "문장을 새로 틀리게 쓰는 일이 있어서다(실측 2026-10-29). 점검마다 모델 호출 한 번이 는다.")
     answer_review_key: str = Field(default="문제", description="점검 답 JSON 에서 고칠 점 목록의 키.")
+    answer_review_open_key: str = Field(
+        default="", description="점검 답 JSON 에서 '답에 필요한데 아직 안 연 조문·별표' 목록의 키. 목록이 있으면 글만 고치게 두지 "
+        "않고 다음 라운드에 조회를 꼭 하게 한다(맡긴 별표를 안 열고 '내용을 알 수 없다'고 답하는 것을 막는다). 비우면 쓰지 않는다.")
+    answer_review_open_text: str = Field(
+        default="답에 필요한 내용이 아직 열지 않은 곳에 있습니다. 먼저 다음을 law_article 로 열어 확인하고 답하세요: {sources}",
+        description="점검이 열라고 한 조문·별표를 되돌리는 문장({sources}).")
     answer_review_request_text: str = Field(
         default="[질문]\n{question}\n\n[답]\n{answer}\n\n[조회 원문]\n{sources}",
         description="답 점검에 넘기는 사용자 메시지 틀.")

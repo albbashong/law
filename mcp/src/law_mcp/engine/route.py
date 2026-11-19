@@ -3,7 +3,8 @@
 '꼭 열기'는 연결 자체에서 정한다: follow 가 매긴 관계가 must_relations(위임·상하위·조례 관계)에 들거나,
 시작 조문이 바로(한 걸음) 다른 문서를 인용한 것(건축법 제55조 → 국토계획법 제77조처럼 기준을 넘기는 인용).
 꼭 열 조문에서 이어진 사슬만, 시작에서 must_depth 걸음 안까지.
-같은 문서 안의 인용(정의 조문 등)과 두 걸음 이상의 단순 인용은 참고로만 둔다.
+꼭 열 조문이 인용한 별표도 꼭 열기다(조문이 기준·금액을 별표에 맡긴다).
+같은 문서 안의 다른 인용(정의 조문 등)과 두 걸음 이상의 단순 인용은 참고로만 둔다.
 """
 import re
 
@@ -59,7 +60,9 @@ def route(store, doc_id: int, path: str, region_doc_id: int | None, depth: int, 
         delegated = ref.relation not in LOWER or (back is not None and delegates[back])
         # 다른 법령으로 넘기는 인용은 꼭 열기 — 단 그 법령의 정의 조문(용어 뜻)은 참고(spec §5)
         crossing = ref.depth == 1 and ref.doc_id != doc_id and not _defines(store, ref)
-        must = chained and delegated and ref.depth <= must_depth and (ref.relation in must_relations or crossing)
+        # 꼭 열 조문이 인용한 별표는 그 조문이 내용(기준·금액·표)을 맡긴 곳 — 같은 법령 안이어도 꼭 열기
+        annexed = back is not None and ref.path.startswith("별표")
+        must = chained and delegated and ref.depth <= must_depth and (ref.relation in must_relations or crossing or annexed)
         gives = bool(DELEGATES.search(_text(store, ref)))
         same = units.get(_unit_key(ref))
         if same is not None:        # 같은 조의 다른 항·호 — 한 단계로 합친다

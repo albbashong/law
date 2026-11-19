@@ -265,3 +265,71 @@ async def test_opened_step_left_out_of_the_answer_is_sent_back(monkeypatch):
     raw = await loop.run_query("건폐율은?", mcp=mcp, model=model, planner=_planner)
     assert model.seen[2][-1]["content"].startswith("근거 표에 위임 단계가 빠졌습니다: 국토의 계획 및 이용에 관한 법률 제77조")
     assert raw["answer"].startswith("국토의 계획 및 이용에 관한 법률 제77조에 따릅니다.")
+
+
+async def test_plan_fetch_runs_alongside_the_first_round():
+    """계획 받기는 첫 라운드(모델 호출·첫 조회)와 동시에 돈다 — 기다렸다 시작하면 계획 시간만큼 매 질문이 늦어진다.
+    계획은 첫 조회 뒤에야 보이므로 그때까지만 받으면 된다."""
+    import asyncio
+    first_round = asyncio.Event()
+
+    async def slow_planner(q):
+        await asyncio.wait_for(first_round.wait(), 2)   # 첫 라운드가 시작돼야 끝나는 계획
+        return PLAN
+
+    class Seen(Model):
+        async def next_step(self, messages, tools, require=False):
+            first_round.set()
+            step = await super().next_step(messages, tools, require)
+            await asyncio.sleep(0.01)   # 모델 호출 시간 — 그사이 계획이 끝난다
+            return step
+    model = Seen([OPEN, {"answer": "제77조에 따라 답입니다."}])
+    raw = await loop.run_query("건폐율은?", mcp=Mcp(), model=model, planner=slow_planner)
+    assert [m for m in model.seen[1] if m.get("name") == planmod.PLAN_MESSAGE_NAME]
+    assert raw["tool_results"][settings.plan_key]["facts"][settings.plan_key] == PLAN
+
+
+async def test_unfinished_plan_is_cancelled_when_the_turn_ends():
+    import asyncio
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def never(q):
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+    class Waits(Model):     # 계획이 실제로 돌기 시작한 뒤에 턴을 끝낸다
+        async def next_step(self, messages, tools, require=False):
+            await asyncio.wait_for(started.wait(), 2)
+            return await super().next_step(messages, tools, require)
+    ask = {"tools": [{"id": "a1", "name": loop.ASK_USER_TOOL["name"], "args": {"question": "어느 지역인가요?"}}]}
+    await asyncio.wait_for(loop.run_query("건폐율은?", mcp=Mcp(), model=Waits([ask]), planner=never), 5)
+    await asyncio.sleep(0)
+    assert cancelled.is_set()
+
+
+async def test_rounds_do_not_wait_for_a_late_plan():
+    """첫 조회 뒤에도 계획이 아직 오지 않았으면 기다리지 않고 다음 라운드를 돈다 — 도착한 뒤 라운드에 붙인다.
+    답을 검사할 때만 기다린다(꼭 열 조문 대조에 계획이 있어야 한다)."""
+    import asyncio
+    second_round = asyncio.Event()
+
+    async def late_planner(q):
+        await asyncio.wait_for(second_round.wait(), 2)    # 두 번째 라운드가 시작돼야 끝나는 계획
+        return PLAN
+
+    class Seen(Model):
+        async def next_step(self, messages, tools, require=False):
+            if len(self.seen) >= 1:
+                second_round.set()
+            step = await super().next_step(messages, tools, require)
+            await asyncio.sleep(0.01)
+            return step
+    model = Seen([OPEN, OPEN | {"tools": [{"id": "c2", "name": "law_article", "args": {"law": "건축법", "article": "제2조"}}]},
+                  {"answer": "제77조에 따라 답입니다."}])
+    raw = await loop.run_query("건폐율은?", mcp=Mcp(), model=model, planner=late_planner)
+    assert not [m for m in model.seen[1] if m.get("name") == planmod.PLAN_MESSAGE_NAME]
+    assert [m for m in model.seen[2] if m.get("name") == planmod.PLAN_MESSAGE_NAME]
+    assert raw["answer"] == "제77조에 따라 답입니다."

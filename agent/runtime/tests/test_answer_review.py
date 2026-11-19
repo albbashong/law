@@ -105,3 +105,31 @@ async def test_second_review_passing_keeps_the_corrected_answer(monkeypatch, tmp
     model = Model([LOOKUP, {"answer": "답1"}, {"answer": '{"문제": ["A"]}'}, {"answer": "답2"}, {"answer": '{"문제": []}'}])
     raw = await loop.run_query("q", mcp=Mcp(), model=model)
     assert raw["answer"] == "답2" and len(model.seen) == 5
+
+
+async def test_review_asking_to_open_a_source_requires_a_lookup(monkeypatch, tmp_path):
+    """점검이 '답에 필요한 내용이 아직 안 연 조문·별표에 있다'(ANSWER_REVIEW_OPEN_KEY)고 하면, 글만 고치게 두지 않고
+    다음 라운드에 조회를 꼭 하게 한다(실측 2026-11-18 pg: 점검이 '별표 1 내용 없음'을 짚었는데 그 말을 답에 옮겨 적음)."""
+    _on(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "answer_review_open_key", "열기")
+    monkeypatch.setattr(settings, "answer_review_open_text", "먼저 다음을 열어 확인하세요: {sources}")
+    required = []
+
+    class Req(Model):
+        async def next_step(self, messages, tools, require=False):
+            required.append(require)
+            return await super().next_step(messages, tools, require)
+    model = Req([LOOKUP, {"answer": "금액은 별표 1에 따릅니다."},
+                 {"answer": '{"문제": ["금액을 밝히지 않음"], "열기": ["시행령 별표 1"]}'},
+                 {"tool": "law_article", "args": {"law": "시행령", "article": "별표 1"}},
+                 {"answer": "음식물은 5만원입니다."}, {"answer": '{"문제": []}'}])
+    raw = await loop.run_query("음식물 한도는?", mcp=Mcp(), model=model)
+    assert required[3] is True
+    assert "먼저 다음을 열어 확인하세요: 시행령 별표 1" in model.seen[3][-1]["content"]
+    assert raw["answer"] == "음식물은 5만원입니다."
+
+
+async def test_open_list_is_ignored_when_the_key_is_unset(monkeypatch, tmp_path):
+    _on(monkeypatch, tmp_path)
+    model = Model([LOOKUP, {"answer": "답"}, {"answer": '{"문제": [], "열기": ["별표 1"]}'}])
+    assert (await loop.run_query("q", mcp=Mcp(), model=model))["answer"] == "답"
