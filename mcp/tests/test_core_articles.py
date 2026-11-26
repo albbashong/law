@@ -2,13 +2,21 @@
 사용승인이 나와 절차를 묻는 질문의 단계가 된다(실측 2026-11-09 '서대문구에서 단독주택 짓으려면': 절차 조문을 하나도
 조회하지 않았다)."""
 from law_mcp.config import get_settings
-from law_mcp.engine.core import core_articles, upper_doc
+from law_mcp.engine.core import core_articles
 from law_mcp.tools.building_basis import call_building_basis
 
 
-def test_upper_doc_is_the_law_a_decree_cites_most(store):
-    enf = store.doc_named("건축법 시행령")
-    assert store.doc(upper_doc(store, enf["doc_id"]))["name"] == "건축법"
+def test_upper_law_comes_from_the_official_hierarchy(store):
+    enf, law = store.doc_named("건축법 시행령"), store.doc_named("건축법")
+    assert store.uppers(enf["doc_id"]) == [law["doc_id"]]
+    assert enf["doc_id"] in store.lowers(law["doc_id"]) and store.law_root(enf["doc_id"]) == law["doc_id"]
+
+
+def test_use_table_is_found_by_its_title_not_by_number(store):
+    from law_mcp.engine.uses import catalog, use_table
+    t = use_table(store)
+    assert (t["law"], t["no"]) == ("건축법 시행령", "1")
+    assert "공장" in [c["name"] for c in catalog(store)]       # 호 이름은 법률의 용도 구분에서
 
 
 def test_core_articles_are_the_most_cited_within_the_law_in_article_order(store):

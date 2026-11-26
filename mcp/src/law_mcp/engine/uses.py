@@ -1,4 +1,4 @@
-"""건축물 용도 해석 — 건축법 시행령 별표 1(용도별 건축물의 종류) 원문에서 바로 찾는다.
+"""건축물 용도 해석 — 용도 분류표(제목 '용도별 건축물의 종류'인 법령 별표, 지금은 건축법 시행령 별표 1) 원문에서 바로 찾는다.
 
 사람이 만든 단어 사전을 두지 않는다. 별표 1의 호 이름("공장")·목에 열거된 시설명("일반음식점")과
 일치하는 것만 돌려주고, 원문에 없는 표현("카페")은 빈 목록 — 호출 측이 용도명으로 바꿔 다시 부른다.
@@ -7,23 +7,43 @@ import re
 
 from law_mcp.store.db import nospace
 
-USE_LAW = "건축법 시행령"
-USE_ANNEX = "1"
+from law_mcp.engine.follow import ANNEX_REL
+
+USE_TITLE = "용도별 건축물의 종류"   # 용도 분류표(별표)의 제목 — 법령 문구. 법령 이름·별표 번호·조문 번호는 여기서 찾아 쓴다
 FACILITY_CHARS = 10      # 이보다 긴 목 머리는 시설명이 아니라 조건을 단 설명("…으로서 …아니하는 것")
 _cache: dict = {}
+_tables: dict = {}
+
+
+def use_table(store) -> dict | None:
+    """용도 분류표 — 법령 별표 가운데 제목이 USE_TITLE 인 것. {doc_id, law, no, annex_id, title, label}"""
+    if id(store) not in _tables:
+        key = nospace(USE_TITLE)
+        rows = store._all("SELECT a.annex_id, a.doc_id, a.no, a.title, d.name AS law FROM annex a"
+                          " JOIN doc d ON d.doc_id=a.doc_id WHERE d.source='law' AND replace(a.title,' ','') LIKE ?"
+                          " ORDER BY a.annex_id", (key + "%",))
+        rows = [r for r in rows if re.sub(r"[\(\[<].*", "", nospace(r["title"])) == key]
+        _tables[id(store)] = {**rows[0], "label": f"{rows[0]['law']} 별표 {rows[0]['no']}"} if len(rows) == 1 else None
+    return _tables[id(store)]
 
 
 def _strip_no(line: str) -> str:
     return re.sub(r"^\s*\d+(?:의\d+)?\.\s*", "", line)
 
 
-def _law_names(store) -> list[str]:
-    """건축법 제2조제2항의 용도 구분 이름 — 별표 1 호 머리에서 이름과 설명이 한 줄로 붙은 경우를 가른다."""
-    d = store.doc_named(USE_LAW.replace(" 시행령", ""))
-    if not d:
+def _law_names(store, table: dict) -> list[str]:
+    """법률이 정한 용도 구분 이름 — 분류표 제목의 근거 조문("제3조의5 관련")이 인용하는 상위 법령 조항의 각 호.
+    분류표 호 머리에서 이름과 설명이 한 줄로 붙은 경우를 가른다."""
+    m = ANNEX_REL.search(table["title"] or "")
+    if not m:
         return []
-    rows = store._all("SELECT text FROM unit WHERE doc_id=? AND path GLOB '제2조/2/*'", (d["doc_id"],))
-    return [re.sub(r"\(.*?\)", "", _strip_no(r["text"])).strip() for r in rows]
+    jo = f"제{m.group(1)}조" + (f"의{m.group(2)}" if m.group(2) else "")
+    uppers = store.uppers(table["doc_id"])
+    out = []
+    for l in store.links_from(table["doc_id"], jo):
+        if l["kind"] == "인용" and l["to_doc"] in uppers and l["to_path"]:
+            out += [re.sub(r"\(.*?\)", "", _strip_no(u["text"])).strip() for u in store.children(l["to_doc"], l["to_path"])]
+    return out
 
 
 def _name(first_line: str, law_names: list[str]) -> str:
@@ -66,10 +86,9 @@ def catalog(store) -> list[dict]:
     hit = _cache.get(id(store))
     if hit is not None:
         return hit
-    d = store.doc_named(USE_LAW)
-    a = store.annex(d["doc_id"], USE_ANNEX) if d else None
+    a = use_table(store)
     out: list[dict] = []
-    law_names = _law_names(store)
+    law_names = _law_names(store, a) if a else []
     if a:
         for it in store.annex_items(a["annex_id"]):
             top, _, rest = it["path"].partition("/")
@@ -90,7 +109,7 @@ def match_use(store, use: str) -> list[dict]:
     """
     q = nospace(use)
     cat = catalog(store)
-    m = re.match(r"^(?:별표1)?제?(\d+(?:의\d+)?)호(?:([가-힣])목)?", q)   # 목은 가…하 다음 거·너·더… 로 이어진다
+    m = re.match(r"^(?:별표\d+)?제?(\d+(?:의\d+)?)호(?:([가-힣])목)?", q)   # 목은 가…하 다음 거·너·더… 로 이어진다
     if m:
         for c in cat:
             if c["ho"] == m.group(1):

@@ -11,7 +11,7 @@
 import re
 
 from law_mcp.config import get_settings
-from law_mcp.engine.follow import _cited_by, rank
+from law_mcp.engine.follow import _cited_by, tier
 from law_mcp.store.db import nospace
 
 PER_NAME = 2
@@ -73,7 +73,7 @@ def _by_title(store, key: str) -> list[dict]:
                        " JOIN doc d ON d.doc_id=u.doc_id WHERE u.unit_id=?", (h["ref"],))
         if u and key in nospace(u["title"] or ""):
             rows.append(u)
-    rows.sort(key=lambda u: (key not in (u["name_key"] or ""), rank(u["kind"]), -_cited_by(store, u["doc_id"])))
+    rows.sort(key=lambda u: (key not in (u["name_key"] or ""), tier(store, u["doc_id"]), -_cited_by(store, u["doc_id"])))
     return [{"law": u["name"], "article": u["label"], "title": u["title"] or "", "text": u["text"] or ""} for u in rows[:PER_NAME]]
 
 
@@ -85,7 +85,7 @@ def _defines(text: str, base: str) -> bool:
 
 def _by_definition(store, base: str) -> list[dict]:
     rows = [u for u in store.search_units(f'"{nospace(base)}"', source="law", limit=300) if _defines(u["text"], base)]
-    rows.sort(key=lambda u: (rank(store.doc(u["doc_id"])["kind"]), -_cited_by(store, u["doc_id"])))
+    rows.sort(key=lambda u: (tier(store, u["doc_id"]), -_cited_by(store, u["doc_id"])))
     out = []
     for u in rows:
         jo = store.unit(u["doc_id"], u["path"].split("/", 1)[0]) or u

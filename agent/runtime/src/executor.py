@@ -189,7 +189,11 @@ class Executor:
         state.messages = list(raw.get("messages") or [])
         errors = [e for e in (raw.get("errors") or []) if isinstance(e, dict)]
 
-        shaped = self._shape(raw.get("answer") or "", state.tool_results, raw.get("usage"))
+        # 되묻기는 루프가 정한다 — 루프가 '고를 것이 남지 않았다'(pending_choice=None)고 알린 답은, 앞서 고르라던 묵은
+        # 결과가 남아 있어도 성형이 되묻기로 뒤집지 않는다(뒤 조회로 확인해 낸 답이다). 루프가 알리지 않으면 예전대로 성형이 본다
+        settled = raw.get("stopped") == "answer" and raw.get("pending_choice", "") is None
+        shaped = self._shape(raw.get("answer") or "", state.tool_results, raw.get("usage"),
+                             **({"clarify": False} if settled else {}))
         self._publish(task_id, shaped)
         # 이전 턴이 errors 를 실었으면, 이번 턴이 비었어도 [] 로 덮어 낡은 것을 지운다.
         existing_errors = any(a.name == "errors" for a in (store.get(task_id).artifacts or []))
@@ -236,6 +240,11 @@ class Executor:
 
         self._remember(task_id, context_id, state.original, answer, raw, context)
 
+        if raw.get("stopped") == "empty":
+            store.transition(task_id, TaskState.FAILED, message=settings.fail_empty_text)
+            self.forget(task_id)
+            return
+
         if not answer and raw.get("stopped") == "rounds":
             store.transition(task_id, TaskState.FAILED,
                              message="라운드 상한 안에 답을 만들지 못했습니다.")
@@ -264,7 +273,10 @@ class Executor:
         turns = before.get("turns") if isinstance(before, dict) else None
         turns = [t for t in turns if isinstance(t, dict)] if isinstance(turns, list) else []
         calls = [c for c in (raw.get("calls") or []) if isinstance(c, dict)][:settings.memory_calls_max]
-        turns = [*turns, {"q": question, "a": answer[:settings.memory_answer_chars], "calls": calls}][-n:]
+        turn = {"q": question, "a": answer[:settings.memory_answer_chars], "calls": calls}
+        if raw.get("topic_start") is True:      # 새 주제를 연 턴 — 다음 턴들은 여기서부터의 기억만 본다
+            turn["topic"] = True
+        turns = [*turns, turn][-n:]
         memory = {"turns": turns}
         self._store.put_artifact(task_id, Artifact.data(task_id, settings.memory_key, memory))
         if settings.memory_local and context_id:

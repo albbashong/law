@@ -7,14 +7,15 @@
 """
 import re
 
-from law_mcp.engine.follow import DEEM, Ref, family, node, rank
+from law_mcp.engine.follow import DEEM, Ref, node
 from law_mcp.store.db import nospace
 
-PLAN_LAW = family("국토의 계획 및 이용에 관한 법률 시행령")
-BUILDING_LAW = family("건축법 시행령")
+PLAN_LAW = "국토의 계획 및 이용에 관한 법률"
+BUILDING_LAW = "건축법"
 # 대지가 도로에 접해야 하는 기준과, 그 기준을 적용하지 않는 지역을 정한 조문의 제목(법령 용어)
 ROAD_TITLE, EXEMPT_TITLE = "대지와 도로의 관계", "적용 제외"
-DEF = re.compile(r"[“\"]([^”\"]{1,30})[”\"]\s*(?:이)?(?:란|이란|라\s*함은|이라\s*함은|라고\s*함은|이라고\s*함은)")
+# 용어 뒤 한자·원어 괄호도 읽는다: "보도"(步道)란
+DEF = re.compile(r"[“\"]([^”\"]{1,30})[”\"]\s*(?:\([^()]{1,20}\)\s*)?(?:이)?(?:란|이란|라\s*함은|이라\s*함은|라고\s*함은|이라고\s*함은)")
 GRANT = re.compile(r"허가|승인")
 DELEGATE = re.compile(r"대통령령으로\s*정")   # 위임 문구(법률 용어)
 # 제2조 밖의 정의: "… 행위(이하 "개발행위"라 한다)"
@@ -97,11 +98,8 @@ def _grant_by_scale(store, term: str, docs) -> tuple | None:
     """승인 조문 제목에 그 말이 없을 때 — 그 말을 정의한 법률의 하위 법령에서, 승인 대상 규모를 그 말로 나눠 정한
     승인·허가 조문("2. 공동주택: 30세대")을 찾아 그 조문이 위임받은 법률 조문을 고른다(주택법 시행령 제27조 → 법 제15조)."""
     item = re.compile(rf"(^|\n)\s*\d+\.\s*{re.escape(term)}\s*[:：]")
-    laws = store._all("SELECT doc_id, name, kind FROM doc WHERE source='law'")
     for doc_id in sorted(docs):
-        top = store.doc(doc_id)
-        lower = [d for d in laws if family(d["name"]) == family(top["name"]) and rank(d["kind"]) > rank(top["kind"])]
-        for d in sorted(lower, key=lambda d: rank(d["kind"])):
+        for d in map(store.doc, store.lowers(doc_id)):      # 가까운 단계(시행령)부터
             for a in store._all("SELECT path, title FROM unit WHERE doc_id=? AND path NOT LIKE '%/%' ORDER BY unit_id",
                                 (d["doc_id"],)):
                 if not GRANT.search(a["title"] or ""):
@@ -148,16 +146,18 @@ def development_permit(store) -> Ref | None:
     return None
 
 
-def titled(store, law: str, title: str) -> Ref | None:
-    """법령에서 제목이 그 법령 용어인 조문."""
-    d = store.doc_named(law)
-    if not d:
-        return None
+def titled_in(store, doc_id: int, title: str) -> Ref | None:
+    """그 법령에서 제목이 그 법령 용어인 조문."""
     for a in store._all("SELECT path, title FROM unit WHERE doc_id=? AND path NOT LIKE '%/%' ORDER BY unit_id",
-                        (d["doc_id"],)):
+                        (doc_id,)):
         if nospace(a["title"]) == nospace(title):
-            return node(store, d["doc_id"], a["path"])
+            return node(store, doc_id, a["path"])
     return None
+
+
+def titled(store, law: str, title: str) -> Ref | None:
+    d = store.doc_named(law)
+    return titled_in(store, d["doc_id"], title) if d else None
 
 
 def road_access(store) -> list[Ref]:
@@ -171,7 +171,8 @@ def road_access(store) -> list[Ref]:
             if re.search(re.escape(key) + r"(?!\d|의\d)", nospace(u["text"] or "")):
                 exempt = node(store, exempt.doc_id, u["path"]) or exempt
                 break
-    decree = titled(store, f"{BUILDING_LAW} 시행령", ROAD_TITLE)
+    # 같은 제목의 조문을 둔 하위 법령(법령체계도) — 가까운 단계부터
+    decree = road and next((r for r in (titled_in(store, d, ROAD_TITLE) for d in store.lowers(road.doc_id)) if r), None)
     if road and decree:   # 법률이 대통령령에 맡긴 항(도로 너비·접하는 길이)을 인용하는 시행령의 항 — 조 전체는 앞 항만 담긴다
         given = [u["path"] for u in store.units_with_prefix(road.doc_id, road.path)
                  if u["path"].count("/") == 1 and DELEGATE.search(u["text"] or "")]

@@ -10,7 +10,7 @@ from pydantic import Field
 
 from law_mcp.config import get_settings
 from law_mcp.engine.facts import excerpt, fit, pack, size
-from law_mcp.engine.follow import DELEGATION_HINT, family, node, rank
+from law_mcp.engine.follow import DELEGATION_HINT, node
 from law_mcp.engine.permits import definitions, development_permit
 from law_mcp.engine.rules import normalize_zone
 from law_mcp.engine.structure import leads
@@ -62,7 +62,7 @@ def _citers(store, to_doc, jo, from_docs=None) -> list[tuple[int, str]]:
 
 def _decree(store, act, jo) -> tuple[int, str] | None:
     """법 조문의 위임을 받는 하위 법령 조 — 위임 문구가 있고 "구분: 면적" 호를 가진 것."""
-    lower = lambda d: rank(store.doc(d)["kind"]) > rank(act["kind"]) and family(store.doc(d)["name"]) == family(act["name"])
+    lower = lambda d: act["doc_id"] in store.uppers(d)
     for d, p in _citers(store, act["doc_id"], jo):
         u = store.unit(d, p)
         if lower(d) and u and DELEGATION_HINT.search(u["text"] or "") and _items(store, d, p):
@@ -194,7 +194,7 @@ def run_split_area(store, region: str | None = None, zone: str | None = None, ad
     dp = development_permit(store)
     if dp:
         national = [(l["from_doc"], l["from_path"]) for l in store.links_to_prefix(act["doc_id"], jo)
-                    if l["from_path"] and family(store.doc(l["from_doc"])["name"]) == family(dp.law)]
+                    if l["from_path"] and store.law_root(l["from_doc"]) == store.law_root(dp.doc_id)]
         national = list(dict.fromkeys(national))
         national = [(d, p) for d, p in national   # 조와 그 아래 호·목이 함께 걸리면 아래 것만
                     if not any(d == d2 and p2.startswith(p + "/") for d2, p2 in national)]
@@ -281,6 +281,8 @@ def register(mcp, get_store):
         건축물이 있는 대지의 분할 제한면적(조례 값, 없으면 시행령 하한)과, 건축물이 없는 토지를 분할할 때의
         개발행위허가 기준 조례(토지분할_허가기준)를 함께 준다. 지목(또는 농지·산지)을 주면 그 땅을 정하는 법률의
         분할 제한(지목_분할제한)도 준다.
+        땅의 종류나 장소가 질문에 없어도 되묻지 말고 있는 것만 넣어 부른다 — 용도지역이 없으면 용도지역별 기준이,
+        시군구가 없으면 시행령의 하한이 나온다.
         """
         return trace("split_area", dict(region=region, zone=zone, address=address, land_category=land_category),
                      with_regulations(get_store(), run_split_area(get_store(), region, zone, address,

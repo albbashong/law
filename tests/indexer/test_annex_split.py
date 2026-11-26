@@ -66,3 +66,23 @@ def test_descriptive_listing_title_is_kept_for_a_single_annex():
     text = "[별표 15]〈개정 2018. 12. 13〉\n양평군 도시계획 조례\n생산녹지지역 안에서 건축할 수 있는 건축물"
     assert normalize_annexes([("0015", "00", "[별표 15] 생산녹지지역 안에서 건축할 수 있는 건축물", text)]) == [
         ("15", "[별표 15] 생산녹지지역 안에서 건축할 수 있는 건축물", text)]
+
+
+def test_number_comes_from_the_listed_title_when_the_text_has_no_header():
+    # 목록 번호(0002)는 올린 순번일 뿐이다 — '별표 5'가 순번 2 로 올라오면 별표 2 와 겹쳤다(실측: 별표 831개 누락)
+    out = normalize_annexes([("0001", "00", "별표 1 ~ 별표 2", "[별표 1]\n가\n[별표 2]\n나"),
+                             ("0002", "00", "별표 5", "머리말 없는 본문")])
+    assert [no for no, _, _ in out] == ["1", "2", "5"]
+
+
+def test_inline_mention_of_an_annex_that_has_its_own_file_is_not_a_header():
+    out = normalize_annexes([("0001", "00", "[별표 1] 산정기준표", "[별표 1] 산정기준표\n1. 금액은\n(별표 2)의 기준에 따라 산정된 금액"),
+                             ("0002", "00", "[별표 2] 세부산정기준표", "[별표 2] 세부산정기준표\n1. 세부")])
+    assert [no for no, _, _ in out] == ["1", "2"]
+    assert out[0][2].endswith("산정된 금액")          # 별표 1 이 본문 속 인용에서 잘리지 않는다
+
+
+def test_same_number_twice_keeps_the_fuller_text_once():
+    out = normalize_annexes([("0001", "00", "[별표 3] 기준", "[별표 3] 기준\n짧다"),
+                             ("0002", "00", "[별표 3] 기준", "[별표 3] 기준\n더 긴 본문이 있다")])
+    assert [(no, text.split("\n")[1]) for no, _, text in out] == [("3", "더 긴 본문이 있다")]

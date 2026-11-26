@@ -29,8 +29,9 @@ from collections.abc import Mapping
 from difflib import SequenceMatcher
 from typing import Any, Protocol
 
-from conditions import reversed_conditions
+from conditions import suspects as condition_suspects
 from config import AGENT_DIR, PROMPT_PATH, settings
+import lookup_cache
 import plan as planmod
 from plan import PLAN_MESSAGE_NAME
 import rates
@@ -114,6 +115,34 @@ def active_domains(calls: list[dict[str, Any]]) -> list[str]:
             if isinstance(v := (c.get("args") or {}).get(k), str)]
     return [name for name, (dlaws, dtools, _) in domains().items()
             if tools & set(dtools) or any(x.startswith(re.sub(r"\s+", "", d)) for d in dlaws for x in laws)]
+
+
+STATE_MESSAGE_NAME = "state_guide"
+
+
+def states() -> dict[str, tuple[list[str], list[str], list[str], str]]:
+    """상태 이름 → (도구들, 결과 키들, 결과 상태값들, 지침). STATES_DIR 이 없으면 빈 dict."""
+    if not settings.states_dir:
+        return {}
+    out = {}
+    for f in sorted((AGENT_DIR / settings.states_dir).glob("*.txt")):
+        head, _, body = f.read_text(encoding="utf-8").partition("---\n")
+        heads = dict(line.split(":", 1) for line in head.splitlines() if ":" in line)
+        names = lambda k: [x.strip() for x in heads.get(k, "").split(",") if x.strip()]   # noqa: E731
+        out[f.stem] = (names("도구"), names("결과키"), names("결과상태"), body.strip())
+    return out
+
+
+def states_of(tool: str, result: Any) -> list[str]:
+    """이 조회 결과가 놓인 상태들 — 부른 도구, 결과 facts 에 든 키, 결과 상태값으로만 정한다(질문의 낱말은 보지 않는다).
+    파일이 적은 조건은 모두 맞아야 하고, 조건이 하나도 없는 파일은 어느 결과에도 맞지 않는다."""
+    if not isinstance(result, Mapping):
+        return []
+    facts = result.get("facts") if isinstance(result.get("facts"), Mapping) else {}
+    status = str(result.get("status") or "")
+    return [name for name, (tools, keys, statuses, _) in states().items()
+            if (tools or keys or statuses) and (not tools or tool in tools)
+            and (not keys or any(k in facts for k in keys)) and (not statuses or status in statuses)]
 
 
 def review_wanted(follow_up: bool, calls: list[dict[str, Any]]) -> bool:
@@ -926,31 +955,35 @@ async def extract_parameters(model: Any, question: str, answer: str, messages: l
     return kept
 
 
-def last_question(context: dict[str, Any] | None) -> str:
-    """작업 기억의 마지막 턴 질문."""
+def thread_turns(context: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """작업 기억에서 지금 주제의 턴들 — 새 주제를 연 마지막 턴("topic")부터. 기억이 없거나 모양이 틀리면 None.
+
+    한 대화에서 주제가 바뀌면 앞 주제의 조회(농지·공장)가 새 주제(해외주식 세금)에 섞여 모델이 그 인자를 베껴
+    불렀다(실측 2026-11-19 pg). 표시가 없는 옛 기억은 전부를 한 주제로 본다."""
     mem = context.get(settings.memory_key) if isinstance(context, dict) else None
     turns = mem.get("turns") if isinstance(mem, dict) else None
-    last = turns[-1] if isinstance(turns, list) and turns and isinstance(turns[-1], dict) else {}
-    return str(last.get("q") or "").strip()
+    if not isinstance(turns, list):
+        return None
+    turns = [t for t in turns if isinstance(t, dict)]
+    start = max((i for i, t in enumerate(turns) if t.get("topic") is True), default=0)
+    return turns[start:]
 
 
 def last_calls(context: dict[str, Any] | None) -> list[dict[str, Any]]:
     """작업 기억의 마지막 턴에서 한 조회들 → [{"tool", "args"}]. 모양이 맞지 않는 것은 뺀다."""
-    mem = context.get(settings.memory_key) if isinstance(context, dict) else None
-    turns = mem.get("turns") if isinstance(mem, dict) else None
-    last = turns[-1] if isinstance(turns, list) and turns and isinstance(turns[-1], dict) else {}
+    turns = thread_turns(context) or []
+    last = turns[-1] if turns else {}
     return [{"tool": c["tool"], "args": dict(c.get("args") or {})} for c in last.get("calls") or []
             if isinstance(c, dict) and isinstance(c.get("tool"), str) and isinstance(c.get("args") or {}, dict)]
 
 
 def previous_work(context: dict[str, Any] | None) -> str:
     """호출자가 돌려준 작업 기억(data 파트) → 이전 작업 블록. 모양이 맞지 않으면 빈 문자열."""
-    mem = context.get(settings.memory_key) if isinstance(context, dict) else None
-    turns = mem.get("turns") if isinstance(mem, dict) else None
-    if not isinstance(turns, list):
+    turns = thread_turns(context)
+    if turns is None:
         return ""
     lines = [settings.memory_heading]
-    for i, t in enumerate((t for t in turns if isinstance(t, dict)), start=1):
+    for i, t in enumerate(turns, start=1):
         lines.append(f"{i}) 질문: {t.get('q', '')}")
         if t.get("a"):
             lines.append(f"   답: {t['a']}")
@@ -989,15 +1022,18 @@ ADDRESS_NUMBER = r"\s+\d+(?:-\d+)?(?:번지)?(?=$|\s|[,.?!)]|(?:에|의|은|는|
 
 
 async def restated(model: Any, text: str, usage_total: dict[str, int],
-                   tools: list[dict[str, Any]] | None = None) -> tuple[str, list[str], bool, bool, str]:
+                   tools: list[dict[str, Any]] | None = None,
+                   own: str | None = None, prior: str = "") -> tuple[str, list[str], bool, bool, str]:
     """RESTATE_PROMPT 로 발화를 정리한 줄들(중립 질문 + 짐작) — 도구 없이 한 번 부른다.
 
     같은 뜻을 다른 말투로 물어도 검색어·범위 판단·결론이 흔들리지 않게 하려는 것이다(일상어·약칭으로
     엉뚱한 법령을 찾고, "안 되죠?" 같은 짐작에 결론이 끌려가던 문제 — 실측 2026-10-27). 발화 원문은 고치지
     않는다. 읽을 수 없거나, 정리한 질문에 발화에 없는 숫자나 법령명이 들어가면(지어낸 값·기억으로 푼 별칭)
     아무것도 붙이지 않는다. 함께 돌려주는 확인할 말(RESTATE_TERMS_KEY)은 발화에 실제로 있는 것만 남긴다.
-    셋째 값은 예시가 필요한 질문이라는 판단(RESTATE_STORY_KEY), 넷째는 앞 질문에 이어지는 질문이라는 판단
-    (RESTATE_FOLLOW_KEY) — 정리한 질문을 버려도 판단은 쓴다. 다섯째는 먼저 부를 도구(RESTATE_TOOL_KEY) — `tools` 의
+    셋째 값은 예시가 필요한 질문이라는 판단(RESTATE_STORY_KEY), 넷째는 앞 질문에 이어지는 질문인지(RESTATE_FOLLOW_KEY)
+    — 정리한 질문을 버려도 판단은 쓴다. 이어짐 칸이 목록이면 '앞 질문에서 가져와 채운 말'로 읽고, 그 가운데 앞 질문(prior)에
+    있고 이번 발화(own)에는 없는 말이 하나라도 있을 때만 이어짐이다(참/거짓 판단은 대상을 채우고도 거짓으로 내던 것 —
+    실측 2026-11-20 qwen3:8b 18번 중 2번 틀림, 가져온 말 목록은 18번 모두 맞음). 다섯째는 먼저 부를 도구(RESTATE_TOOL_KEY) — `tools` 의
     이름과 설명 첫 줄을 정리 지시 뒤에 보이고, 고른 이름이 그 목록에 있을 때만 돌려준다.
     """
     if not settings.restate_prompt:
@@ -1023,6 +1059,12 @@ async def restated(model: Any, text: str, usage_total: dict[str, int],
         want = data.get(key) if key and isinstance(data, dict) else None
         return want is True or (isinstance(want, str) and want.strip().lower() == "true")
     story, follow = flag(settings.restate_story_key), flag(settings.restate_follow_key)
+    taken = data.get(settings.restate_follow_key) if settings.restate_follow_key and isinstance(data, dict) else None
+    if isinstance(taken, list):
+        bare_prior, bare_mine = (re.sub(r"\s+", "", x) for x in (prior, text if own is None else own))
+        follow = any(isinstance(w, str) and (b := re.sub(r"\s+", "", w)) and b in bare_prior and b not in bare_mine
+                     for w in taken)
+        logger.info("restate taken=%s follow=%s", taken, follow)
     lead = data.get(settings.restate_tool_key) if offered and isinstance(data, dict) else None
     lead = lead.strip() if isinstance(lead, str) and lead.strip() in offered else ""
     question = str((data or {}).get(settings.restate_question_key) or "").strip() if isinstance(data, dict) else ""
@@ -1040,11 +1082,14 @@ async def restated(model: Any, text: str, usage_total: dict[str, int],
     if presumption:
         lines.append(settings.restate_presumption_line.format(presumption=presumption))
     raw_terms = data.get(settings.restate_terms_key) or []
+    # 확인할 말은 이번 발화(own)에 있는 것만 — 정리 입력에 붙인 [앞 질문] 줄의 말이 새 질문에 남지 않게(실측 2026-11-19)
+    own_text = text if own is None else own
+    bare_own = re.sub(r"\s+", "", own_text)
     # 주소의 일부는 법령 용어가 아니다 — 숫자가 든 말(번지)과 발화에서 바로 뒤에 숫자가 오는 말(번지 앞 지명)은 뺀다
     terms = list(dict.fromkeys(t.strip() for t in (raw_terms if isinstance(raw_terms, list) else [raw_terms])
-                               if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_text
+                               if isinstance(t, str) and t.strip() and re.sub(r"\s+", "", t) in bare_own
                                and not re.search(r"\d", t)
-                               and not re.search(re.escape(t.strip()) + ADDRESS_NUMBER, text)))
+                               and not re.search(re.escape(t.strip()) + ADDRESS_NUMBER, own_text)))
     logger.info("restate: %s | %s | terms=%s story=%s follow=%s lead=%s", question, presumption, terms, story, follow, lead)
     return "\n".join(lines), terms[:settings.restate_terms_max], story, follow, lead
 
@@ -1132,9 +1177,10 @@ async def run_query(
         asked = with_focus(query, context)
         # 질문 정리는 새 질문에만 — 재개는 되묻기에 답하는 것이라 앞 대화가 뜻을 정한다
         # 앞 질문을 함께 보인다 — "그럼 어떻게 해"처럼 대상을 생략한 이어지는 질문을 앞 질문의 대상으로 채워 정리하게
-        prev_q = last_question(context) if work else ""
-        restate_in = asked + (f"\n{settings.restate_prior_line.format(question=prev_q)}"
-                              if prev_q and settings.restate_prior_line else "")
+        # 같은 주제의 앞 질문을 모두 — 바로 앞 질문("500만원이면?")만 보이면 주제(해외주식)가 정리에서 빠진다(실측 2026-11-19)
+        prior_qs = [q for q in (str(t.get("q") or "").strip() for t in thread_turns(context) or []) if q] if work else []
+        restate_in = asked + "".join(f"\n{settings.restate_prior_line.format(question=q)}"
+                                     for q in prior_qs if settings.restate_prior_line)
         def say(text: str, fraction: float = 0.0) -> None:
             if on_progress is not None and text:
                 on_progress(fraction, text)
@@ -1147,7 +1193,12 @@ async def run_query(
         if not (carried or down) and settings.restate_prompt:
             say(settings.progress_restate_text)
         neutral, terms, story_need, follow, lead = (("", [], False, False, "") if carried or down
-                                                    else await restated(model, restate_in, usage_total, listed))
+                                                    else await restated(model, restate_in, usage_total, listed, own=asked,
+                                                                    prior="\n".join(prior_qs)))
+        # 정리 단계가 홀로 선 새 질문으로 정리했다 — 앞 주제의 작업은 보이지 않는다(그 조회 인자를 베껴 부르지 않게)
+        topic_start = not work or (not follow and bool(neutral))
+        if work and topic_start:
+            work = ""
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *carried,
@@ -1170,12 +1221,16 @@ async def run_query(
         ambiguous: list[dict[str, Any]] = []       # 마지막 조회가 고르라고 돌려준 후보 — 그 뒤 글로 낸 답은 이 후보로 되묻는다
         pointers: set[str] = set()                 # 도구가 '열어 볼 조문 목록'이라고 표시한 facts 키
 
+        pending_choice: str | None = None   # 마지막 조회가 후보를 고르라고 한 도구 — 뒤에 다른 조회가 오면 풀린다
+
         def done(stopped: str, answer: str = "", **extra: Any) -> dict[str, Any]:
             return {
                 "answer": answer, "tool_results": tool_results, "stopped": stopped,
                 "usage": dict(usage_total), "errors": list(failures),
                 "messages": [m for m in messages if m.get("role") != "system"],
                 "calls": list(calls_made),
+                "topic_start": topic_start,
+                "pending_choice": pending_choice,
                 **extra,
             }
 
@@ -1192,7 +1247,11 @@ async def run_query(
         # 계획은 정리된 질문으로 받는다 — 말투 섞인 원문으로 검색하면 엉뚱한 조문이 시작이 된다(실측 2026-11-16 "그러면 내가 농장을
         # … 예시좀 들어줄래" → 나주시 시세 감면 조례). 이어지는 질문인데 정리된 질문이 없으면 대상을 몰라 계획을 받지 않는다
         plan_question = restated_question(neutral) or ("" if work else query)
-        if planner is not None and not carried and plan_question:
+        # 같은 질문을 다시 물었다 — 앞서 검사를 통과한 턴의 조회를 다시 실행한다(이어지는 질문은 앞 턴 조회가 먼저).
+        # 그 조회가 이미 계획을 따라 근거를 찾았으므로 계획은 받지 않는다(계획이 매번 달라 경로가 흔들린다)
+        cache_q = "" if carried else restated_question(neutral)
+        cached = lookup_cache.get(cache_q) if cache_q and not (follow and work) else None
+        if planner is not None and not carried and plan_question and not cached:
             say(settings.progress_plan_text)
             plan_task = asyncio.ensure_future(planner(plan_question))
         tools = [*listed, ASK_USER_TOOL, *([story_tool()] if settings.story_prompt else [])]
@@ -1220,12 +1279,13 @@ async def run_query(
         for label, exc in (report_dead() if callable(report_dead) else {}).items():
             failures.append(_failure(label, McpUnavailable(label, exc), 1))
 
-        cite_checked = force_answer = cite_lookup_due = plan_checked = False
+        force_answer = cite_lookup_due = plan_checked = False
+        sent_back: set[str] = set()     # 이미 한 번 되돌린 검사 — 검사마다 기회가 따로 있다
         reviewed = 0
         # 정리 단계가 예시가 필요한 질문으로 보면 요청이 없어도 이야기로 다시 쓴다. 이때는 앞 턴 조회를 다시
         # 돌리지 않는다 — 그건 앞 답을 이야기로 해 달라는 요청(retell_as_story 호출)일 때의 일이다.
         story_wanted = replayed = bool(story_need and settings.story_prompt)
-        story_called = False
+        story_called = already_replayed = False
         story_form: str | None = None
         # 이전 작업 블록의 인용은 근거로 치지 않는다 — 이번에 다시 조회해야 인용할 수 있다
         # 계획 줄은 근거가 아니다 — 이번 계획과, 재개로 이어 온 앞 계획 모두 대조에서 뺀다
@@ -1234,6 +1294,8 @@ async def run_query(
             (plan_pending,) if plan_pending else ())
         opened: list[dict[str, Any]] = list(last_calls(context)) if work else []   # 앞 턴에 연 법령도 분야를 켠다
         shown: list[str] = []
+        stated: list[str] = []          # 이미 붙인 상태 지침
+        state_pending: list[str] = []   # 이번 조회들로 새로 든 상태 — 결과 뒤에 붙일 차례
 
         async def settle_plan() -> None:
             """띄워 둔 계획을 받는다(한 번만). 계획 실패는 답을 막지 않는다."""
@@ -1253,11 +1315,70 @@ async def run_query(
                 tool_results[settings.plan_key] = {"facts": {settings.plan_key: plan_now}}
                 cite_notes += (plan_pending,)
 
-        async def replay_last() -> None:
-            """앞 턴의 조회를 다시 실행해 결과를 대화에 놓는다. 결과마다 가짜 tool_call 과 짝을 지어 둔다(짝 없는
+        originals: dict[str, str] = {}      # 모델에게 보인 조회 결과 글 → 자르지 않은 원본
+
+        def record(name: str, args: Mapping[str, Any], result: Any, *, replay: bool = False) -> tuple[str, bool]:
+            """조회 결과 하나를 등록한다 — 본 루프의 조회든 런타임이 다시 실행한 조회든 같은 절차를 거친다(되묻기 후보·
+            꼭 나올 이름·답 끝 줄·열어 볼 목록 표시). 모델에게 보일 글과, 새 내용 없는 반복이라 막혔는지를 돌려준다."""
+            nonlocal pick, ambiguous, footers, pointers, pending_choice
+            # 성형(shape_result)에는 **자르지 않은 원본**을 남긴다 — 상위
+            # 오케스트레이터가 필요로 하는 값(도형·좌표 등)이 뒤쪽에 있을 수 있다.
+            # 같은 도구를 다시 부르면 자리를 뒤로 옮긴다 — 키 순서가 곧 마지막 호출
+            # 순서다. shape.clarify_source 가 "가장 최근 결과"를 이 순서로 고른다.
+            tool_results.pop(name, None)
+            tool_results[name] = result
+            if (made := {"tool": name, "args": dict(args)}) not in calls_made:
+                calls_made.append(made)
+            failures[:] = [f for f in failures if f["tool"] != name]  # 풀린 오류는 안 보인다
+            if isinstance(result, Mapping) and isinstance(result.get(settings.pick_key), str):
+                pick = (name, result[settings.pick_key])
+            elif pick and pick[0] == name:
+                pick = None
+            if isinstance(result, Mapping) and isinstance(result.get(settings.mention_key), list):
+                for m in map(_mention, result[settings.mention_key]):
+                    if m and m["name"] not in {x["name"] for x in mentions}:
+                        mentions.append(m)
+            cands = (result.get("facts") or {}).get("candidates") if isinstance(result, Mapping) else None
+            ambiguous = ([c for c in cands if isinstance(c, Mapping) and c.get("label")]
+                         if settings.disambiguation_status and isinstance(cands, list)
+                         and result.get("status") == settings.disambiguation_status else [])
+            # 마지막 조회가 되묻기 상태(CLARIFY_STATUS_VALUES — 성형이 보는 것과 같은 기준)로 끝났는가
+            pending_choice = name if (isinstance(result, Mapping)
+                                      and str(result.get("status") or "") in set(settings.clarify_status_names())) else None
+            if isinstance(result, Mapping) and isinstance(result.get(settings.footer_key), list):
+                footers += [f for f in result[settings.footer_key] if isinstance(f, str) and f not in footers]
+            if isinstance(result, Mapping) and isinstance(result.get(settings.pointer_key), list):
+                pointers |= {k for k in result[settings.pointer_key] if isinstance(k, str)}
+            for st in states_of(name, result):
+                if st not in stated:
+                    stated.append(st)
+                    state_pending.append(st)
+            fed = _for_model(result)
+            whole = json.dumps(model_view(result), ensure_ascii=False, default=str)
+            # 런타임이 다시 실행한 조회는 '새 내용 없는 반복' 셈에 넣지 않는다 — 모델이 아직 아무것도 부르지 않았다
+            found = set() if replay else result_marks(fed)
+            same = False
+            if found and found <= marks.get(name, set()):
+                stale[name] = stale.get(name, 0) + 1
+                if stale[name] >= settings.tool_retry_max:
+                    fed += "\n" + settings.same_result_text.format(name=name, n=stale[name] + 1)
+                    same = True
+            marks[name] = marks.get(name, set()) | found
+            if whole != fed:        # 잘렸거나 안내가 붙은 글 — 검증은 원본으로 한다(evidence)
+                originals[fed] = whole
+            return fed, same
+
+        def evidence() -> list[dict[str, Any]]:
+            """답 검사가 보는 대화 — 모델에게는 잘라 보인 조회 결과도 여기서는 원본이다. 잘린 글로 검사하면 뒤쪽 조문은
+            근거가 없다고 하고, 깨진 JSON 이라 '열어 볼 목록' 거르기·짝 검사는 꺼진다."""
+            return [{**m, "content": originals[m["content"]]} if m.get("role") == "tool" and m.get("content") in originals
+                    else m for m in messages]
+
+        async def replay_last(calls: list[dict[str, Any]] | None = None) -> None:
+            """앞 턴의(또는 주어진) 조회를 다시 실행해 결과를 대화에 놓는다. 결과마다 가짜 tool_call 과 짝을 지어 둔다(짝 없는
             tool 메시지는 모델 API 가 거부한다)."""
-            replays = [c for c in (last_calls(context) if work else [])
-                       if c["tool"] in known_tools and c["tool"] not in RESERVED_TOOLS]
+            source = calls if calls is not None else (last_calls(context) if work else [])
+            replays = [c for c in source if c["tool"] in known_tools and c["tool"] not in RESERVED_TOOLS]
             ids = [f"replay_{i}" for i in range(len(replays))]
             if replays:
                 say(settings.progress_replay_text)
@@ -1274,17 +1395,19 @@ async def run_query(
                 except Exception as exc:  # noqa: BLE001 — 다시 실행 실패는 모델이 직접 조회하면 된다
                     content = _for_model({"success": False, "error": str(exc)})
                 else:
-                    tool_results.pop(c["tool"], None)
-                    tool_results[c["tool"]] = result
-                    if c not in calls_made:
-                        calls_made.append(c)
-                    content = _for_model(result)
+                    content, _ = record(c["tool"], c["args"], result, replay=True)
                 messages.append({"role": "tool", "tool_call_id": cid, "name": c["tool"], "content": content})
 
         # 앞 질문의 대상을 생략한 이어지는 질문 — 앞 턴의 조회를 먼저 다시 실행해 그 근거 위에서 답하게 한다
         if follow and work:
             await replay_last()
             lead = ""           # 앞 턴 조회가 이미 근거를 놓았다
+            already_replayed = True
+        elif cached:
+            logger.info("lookup cache: replaying %d calls for %s", len(cached), cache_q)
+            await replay_last(cached)
+            lead = ""
+        empty_sent_back = False
         for round_idx in range(rounds_max):
             # 분야 지침 — 모델이 연 법령·부른 도구에 맞는 지침을 공통 프롬프트 뒤에 붙인다
             on = active_domains(opened + calls_made)
@@ -1299,6 +1422,15 @@ async def run_query(
                 say(settings.progress_read_text, min(round_idx / rounds_max, 1.0))
                 # 계획이 이미 와 있으면 받는다 — 아직이면 기다리지 않고 이번 라운드를 돌고, 온 뒤 라운드에 붙인다
                 await asyncio.sleep(0)      # 끝낼 수 있는 계획은 끝낼 기회를 준다
+                if state_pending:
+                    # 결과가 놓인 상태의 지침 — 그 결과 바로 뒤에. 지침 글은 근거가 아니다(cite_notes 로 대조에서 뺀다)
+                    table = states()
+                    for st in state_pending:
+                        guide = settings.state_heading.format(name=st, body=table[st][3])
+                        messages.append({"role": "user", "name": STATE_MESSAGE_NAME, "content": guide})
+                        cite_notes += (guide,)
+                    logger.info("states: %s", state_pending)
+                    state_pending.clear()
                 if plan_task is not None and plan_task.done():
                     await settle_plan()
                 if plan_pending:
@@ -1324,6 +1456,14 @@ async def run_query(
             usage_total["tokens_in"] += step_usage.get("tokens_in") or 0
             usage_total["tokens_out"] += step_usage.get("tokens_out") or 0
 
+            if "answer" in step and (not step["answer"].strip() or step.get("cut")):
+                # 빈 답·한도에 끊긴 답 — 검사할 글이 없어 모든 검사를 통과해 버린다. 한 번 다시 받고, 또 그러면 실패로 끝낸다
+                logger.warning("empty or cut answer (cut=%s, %d chars)", bool(step.get("cut")), len(step["answer"]))
+                if empty_sent_back or not settings.empty_answer_text or round_idx + 1 >= rounds_max:
+                    return done("empty")
+                empty_sent_back = True
+                messages.append({"role": "user", "content": settings.empty_answer_text})
+                continue
             if "answer" in step:
                 await settle_plan()
                 if ambiguous and step["answer"].strip():
@@ -1341,36 +1481,33 @@ async def run_query(
                     messages.append({"role": "assistant", "content": step["answer"]})
                     messages.append({"role": "user", "content": settings.answer_no_lookup_text})
                     continue
-                bad = ungrounded(step["answer"], messages, cite_notes, pointers)
+                seen = evidence()
+                bad = ungrounded(step["answer"], seen, cite_notes, pointers)
                 # 열어 볼 목록에만 있던 인용 — '그 조문 원문을 열라'고 따로 되돌린다(같은 목록 도구를 또 부르지 않게)
-                listed = ([c for c in bad if c not in ungrounded(step["answer"], messages, cite_notes)]
+                listed = ([c for c in bad if c not in ungrounded(step["answer"], seen, cite_notes)]
                           if pointers and settings.answer_pointer_retry_text else [])
-                bad += [x for x in mispaired(step["answer"], messages) if x not in bad]
-                bad += [x for x in unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
-                bad += [x for x in loose_unnamed_laws(step["answer"], messages, cite_notes) if x not in bad]
-                bad += [f"“{x}”" for x in misquoted(step["answer"], messages, cite_notes) if f"“{x}”" not in bad]
-                off = rate_unmatched(step["answer"], messages, cite_notes) if settings.answer_rate_check else []
-                flips = reversed_conditions(step["answer"], messages) if settings.answer_condition_check else []
-                # 점검이 켜져 있으면 조건 대조는 점검에 넘긴다 — 곧바로 되돌리면 오탐이 옳은 문장을 고치게 한다
-                review_on = bool(settings.answer_review_prompt) and review_wanted(bool(work), calls_made)
-                hinted, flips = (flips, []) if review_on else ([], flips)
+                bad += [x for x in mispaired(step["answer"], seen) if x not in bad]
+                bad += [x for x in unnamed_laws(step["answer"], seen, cite_notes) if x not in bad]
+                bad += [x for x in loose_unnamed_laws(step["answer"], seen, cite_notes) if x not in bad]
+                bad += [f"“{x}”" for x in misquoted(step["answer"], seen, cite_notes) if f"“{x}”" not in bad]
+                off = rate_unmatched(step["answer"], seen, cite_notes) if settings.answer_rate_check else []
+                # 비교어가 원문과 엇갈린 조건은 점검 단계에 후보로 넘긴다 — 런타임은 뜻을 판정해 되돌리지 않는다
+                hinted = condition_suspects(step["answer"], seen) if settings.answer_condition_check else []
                 missed = [m["label"] for m in mentions if _bare(m["name"]) not in _bare(step["answer"])]
                 leaks = internal_names(step["answer"], known_tools)
-                unplanned = (planmod.unopened(plan_now, messages, pointers)
+                unplanned = (planmod.unopened(plan_now, seen, pointers)
                              if plan_now and settings.plan_retry_text else [])
                 if unplanned:
-                    logger.info("answer check: plan steps not opened=%s retry=%s", unplanned, not cite_checked)
-                if missed and not cite_checked and round_idx + 1 < rounds_max:
-                    logger.info("answer check: missing mentions=%s", missed)
-                # 한 번만 되돌린다 — 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
-                if bad or off:
-                    logger.info("answer check: cites=%s rates=%s retry=%s", bad, off, not cite_checked)
-                if leaks:
-                    logger.info("answer check: internal names=%s retry=%s", leaks, not cite_checked)
-                if flips:
-                    logger.info("answer check: reversed conditions=%s retry=%s", flips, not cite_checked)
-                # 계획 되돌림은 따로 한 번 — 인용 되돌림 기회를 함께 쓰면 계획을 따른 뒤 쓴 조회 안 한 인용이 꼬리표만 달고 나간다
-                retry_cites = bool(bad or off or missed or leaks or flips) and not cite_checked
+                    logger.info("answer check: plan steps not opened=%s retry=%s", unplanned, not plan_checked)
+                # 검사마다 한 번씩 되돌린다 — 한 검사가 기회를 쓰면 고쳐 쓴 답의 다른 잘못(지어낸 인용)이 꼬리표만 달고 나갔다.
+                # 같은 검사에 다시 걸리면 답은 내되 걸린 인용·수치를 ungrounded 로 남긴다
+                found = {"cites": bad, "rates": off, "mentions": missed, "leaks": leaks}
+                due = {k for k, v in found.items() if v and k not in sent_back}
+                for k, v in found.items():
+                    if v:
+                        logger.info("answer check: %s=%s retry=%s", k, v, k in due)
+                bad_due, off_due, missed_due, leaks_due = (found[k] if k in due else [] for k in found)
+                retry_cites = bool(due)
                 # 답이 다루는 법령의 꼭 열 조문만 되돌린다 — 엇나간 시작 조문의 계획이 되돌림 한 바퀴를 더 쓰게 한다(실측 G01)
                 plan_due = planmod.addressed(plan_now, unplanned, step["answer"]) if unplanned else []
                 # 연 꼭 열 조문을 그 법령을 다룬 답이 적지 않았다 — 근거 표의 위임 단계가 빠졌다(계획 되돌림과 함께 한 번)
@@ -1380,19 +1517,19 @@ async def run_query(
                     logger.info("answer check: plan steps opened but not in the answer=%s", gaps)
                 retry_plan = bool(plan_due or gaps) and not plan_checked
                 if (retry_cites or retry_plan) and round_idx + 1 < rounds_max:
-                    cite_checked = cite_checked or retry_cites
+                    sent_back |= due
                     plan_checked = plan_checked or retry_plan
                     plan_due, gaps = (plan_due, gaps) if retry_plan else ([], [])
-                    cite_lookup_due = bool(bad or plan_due)
+                    cite_lookup_due = bool(bad_due or plan_due)
                     say(settings.progress_check_text)
                     messages.append({"role": "assistant", "content": step["answer"]})
-                    unseen = [c for c in bad if c not in listed]
+                    listed = [c for c in listed if c in bad_due]
+                    unseen = [c for c in bad_due if c not in listed]
                     note = " ".join(([settings.answer_cite_retry_text.format(cites=", ".join(unseen))] if unseen else [])
                                     + ([settings.answer_pointer_retry_text.format(cites=", ".join(listed))] if listed else [])
-                                    + ([settings.answer_rate_retry_text.format(rates=", ".join(off))] if off else [])
-                                    + ([settings.mention_retry_text.format(names=", ".join(missed))] if missed else [])
-                                    + ([settings.answer_internal_retry_text.format(names=", ".join(leaks))] if leaks else [])
-                                    + ([settings.answer_condition_retry_text.format(conds="; ".join(flips))] if flips else [])
+                                    + ([settings.answer_rate_retry_text.format(rates=", ".join(off_due))] if off_due else [])
+                                    + ([settings.mention_retry_text.format(names=", ".join(missed_due))] if missed_due else [])
+                                    + ([settings.answer_internal_retry_text.format(names=", ".join(leaks_due))] if leaks_due else [])
                                     + ([settings.plan_retry_text.format(steps=", ".join(plan_due))] if plan_due else [])
                                     + ([settings.plan_list_retry_text.format(steps=", ".join(gaps))] if gaps else [])
                                     + ([settings.answer_retry_tail] if settings.answer_retry_tail else []))
@@ -1404,8 +1541,6 @@ async def run_query(
                 if (reviewed < settings.answer_review_max and round_idx + 1 < rounds_max
                         and review_wanted(bool(work), calls_made)):
                     reviewed += 1
-                    if settings.answer_condition_check and not hinted:
-                        hinted = reversed_conditions(step["answer"], messages)
                     if hinted:
                         logger.info("answer check: conditions to review=%s", hinted)
                     say(settings.progress_review_text)
@@ -1455,6 +1590,11 @@ async def run_query(
                               if settings.story_append_format else story)
                 if settings.answer_closing_text:   # 마무리는 맨 끝 — ※ 알림·이야기 뒤
                     answer = drop_closing(answer).rstrip() + "\n\n" + settings.answer_closing_text
+                # 조회한 원문이 받친 답의 조회만 — 다음에 같은 질문이면 다시 실행한다. 인용이 다 확인되지 않아도 확인된 인용이
+                # 하나라도 있으면 둔다(작은 모델은 계획에만 있던 조문까지 인용해 검사를 다 통과하는 일이 드물다, 실측 2026-11-19 pg)
+                cited = [m.group(0) for m in re.finditer(settings.answer_cite_pattern, told)] if settings.answer_cite_pattern else []
+                if cache_q and (not bad or any(re.sub(r"\s+", "", c) not in {re.sub(r"\s+", "", b) for b in bad} for c in cited)):
+                    lookup_cache.put(cache_q, calls_made)
                 return done("answer", answer=answer, ungrounded=bad, parameters=params)
 
             calls = _tool_calls_from_step(step)
@@ -1469,6 +1609,11 @@ async def run_query(
                 def feed(content: str, *, call_id: str = call_id, name: str = name) -> None:
                     messages.append({"role": "tool", "tool_call_id": call_id,
                                      "name": name, "content": content})
+
+                if args is None:        # 인자 글이 깨졌다(JSON 아님) — 빈 인자로 부르지 않는다
+                    logger.warning("unreadable tool arguments: %s", name)
+                    feed(settings.args_unreadable_text.format(name=name))
+                    continue
 
                 if name not in known_tools:
                     feed(_UNKNOWN_TOOL_TEMPLATE.format(name=name))
@@ -1496,7 +1641,7 @@ async def run_query(
 
                 if name == STORY:
                     if not story_called:
-                        story_called, replayed = True, False
+                        story_called, replayed = True, already_replayed    # 이미 다시 실행한 앞 턴 조회를 또 실행하지 않는다
                     story_wanted = True
                     story_form = args.get("form") if isinstance(args, dict) else None
                     logger.info("story requested: form=%s", story_form)
@@ -1529,39 +1674,8 @@ async def run_query(
                     feed(_for_model({"success": False, "error": failure["message"]}))
                     continue
 
-                # 성형(shape_result)에는 **자르지 않은 원본**을 남긴다 — 상위
-                # 오케스트레이터가 필요로 하는 값(도형·좌표 등)이 뒤쪽에 있을 수 있다.
-                # 같은 도구를 다시 부르면 자리를 뒤로 옮긴다 — 키 순서가 곧 마지막 호출
-                # 순서다. shape.clarify_source 가 "가장 최근 결과"를 이 순서로 고른다.
-                tool_results.pop(name, None)
-                tool_results[name] = result
-                if (made := {"tool": name, "args": dict(args)}) not in calls_made:
-                    calls_made.append(made)
-                failures[:] = [f for f in failures if f["tool"] != name]  # 풀린 오류는 안 보인다
-                if isinstance(result, Mapping) and isinstance(result.get(settings.pick_key), str):
-                    pick = (name, result[settings.pick_key])
-                elif pick and pick[0] == name:
-                    pick = None
-                if isinstance(result, Mapping) and isinstance(result.get(settings.mention_key), list):
-                    for m in map(_mention, result[settings.mention_key]):
-                        if m and m["name"] not in {x["name"] for x in mentions}:
-                            mentions.append(m)
-                cands = (result.get("facts") or {}).get("candidates") if isinstance(result, Mapping) else None
-                ambiguous = ([c for c in cands if isinstance(c, Mapping) and c.get("label")]
-                             if settings.disambiguation_status and isinstance(cands, list)
-                             and result.get("status") == settings.disambiguation_status else [])
-                if isinstance(result, Mapping) and isinstance(result.get(settings.footer_key), list):
-                    footers += [f for f in result[settings.footer_key] if isinstance(f, str) and f not in footers]
-                if isinstance(result, Mapping) and isinstance(result.get(settings.pointer_key), list):
-                    pointers |= {k for k in result[settings.pointer_key] if isinstance(k, str)}
-                fed = _for_model(result)
-                found = result_marks(fed)
-                if found and found <= marks.get(name, set()):
-                    stale[name] = stale.get(name, 0) + 1
-                    if stale[name] >= settings.tool_retry_max:
-                        fed += "\n" + settings.same_result_text.format(name=name, n=stale[name] + 1)
-                        blocked += 1
-                marks[name] = marks.get(name, set()) | found
+                fed, same = record(name, args, result)
+                blocked += same
                 feed(fed)
 
             # 이번 라운드의 호출이 모두 반복이라 막혔다 — 다음 라운드는 도구 없이 지금까지 조회한 것으로 답하게 한다
@@ -1862,7 +1976,8 @@ class ModelAdapter:
             if forced is not None:
                 return forced
 
-        if choice.finish_reason == "tool_calls" and message.tool_calls:
+        # 도구 호출이 왔으면 종료 사유가 무엇이든 호출이다 — "stop" 으로 닫는 서버가 있고, 그때 버리면 조회가 사라진다
+        if message.tool_calls:
             calls = [
                 {
                     "id": tc.id,
@@ -1887,7 +2002,8 @@ class ModelAdapter:
 
         # finish_reason == "stop" (또는 그 밖의 종료) — content 가 최종 답이다.
         # message.reasoning 은 절대 여기 섞지 않는다: 사용자에게 보일 텍스트가 아니다.
-        return {"answer": message.content or "", "usage": usage}
+        # 토큰 한도에 걸려 끊긴 글(cut)은 끝난 답이 아니다 — 루프가 다시 받는다
+        return {"answer": message.content or "", "usage": usage, "cut": choice.finish_reason == "length"}
 
 
     async def _forced_call(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]],
@@ -1946,12 +2062,13 @@ def _usage_from_response(response: Any) -> dict[str, int]:
     return {"tokens_in": tokens_in or 0, "tokens_out": tokens_out or 0}
 
 
-def _parse_tool_arguments(raw: str | None) -> dict[str, Any]:
-    """`function.arguments` 는 JSON 문자열이지 dict 가 아니다 — 직접 파싱한다."""
+def _parse_tool_arguments(raw: str | None) -> dict[str, Any] | None:
+    """`function.arguments` 는 JSON 문자열이지 dict 가 아니다 — 직접 파싱한다. 인자 없는 호출은 {}, 읽지 못한 글은 None
+    (빈 인자로 부르면 도구가 엉뚱한 기본값으로 답한다 — 루프가 호출하지 않고 되돌린다)."""
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None

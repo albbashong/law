@@ -52,24 +52,74 @@ def run_pool(items, fn, workers, label):
 
 def laws():
     db = sqlite3.connect(LAW_DB)
-    return db.execute("SELECT mst, item_id, kind FROM law").fetchall()
+    cols = {c[1] for c in db.execute("PRAGMA table_info(law)")}
+    live = " WHERE COALESCE(superseded, 0)=0" if "superseded" in cols else ""   # 개정·폐지된 판 제외
+    return db.execute(f"SELECT mst, item_id, kind FROM law{live}").fetchall()
+
+
+LAW_TIERS = ("법률", "시행령", "시행규칙")   # 체계도 XML 의 법령 단계 요소 이름(법제처 형식)
+
+
+def tree_law_ids(xml: str) -> set:
+    """체계도 하나에 든 법령(법률·시행령·시행규칙)의 법령ID — 행정규칙·자치법규 가지는 보지 않는다."""
+    out = set()
+
+    def walk(el):
+        info = el.find("기본정보")
+        if info is not None and info.findtext("법령ID"):
+            out.add(info.findtext("법령ID").strip())
+        for c in el:
+            if c.tag in LAW_TIERS:
+                walk(c)
+
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return out
+    for top in root.iter("상하위법"):
+        for c in top:
+            if c.tag in LAW_TIERS:
+                walk(c)
+    return out
 
 
 def do_stmd(oc, workers):
+    """법령체계도 — 한 체계도에 그 법률의 시행령·시행규칙이 다 들어 있으므로, 이미 받은 체계도에 나온 법령은
+    다시 받지 않는다. 법률부터 받아 하위 법령 호출을 줄인다."""
     path = OUT / "stmd.jsonl"
-    seen = done_keys(path, "mst")
-    todo = [m for m, _, _ in laws() if m not in seen]
-    print(f"[stmd] 남은 {len(todo)}건", flush=True)
+    covered = set()
+    if path.exists():
+        with path.open() as f:
+            for line in f:
+                if line.strip():
+                    covered |= tree_law_ids(json.loads(line)["xml"])
+    lock = threading.Lock()
     w = Writer(path)
 
-    def fn(mst):
+    def fn(row):
+        mst, law_id = row
+        with lock:
+            if law_id in covered:
+                return
         q = urllib.parse.urlencode({"OC": oc, "target": "lsStmd", "MST": mst, "type": "XML"})
         try:
-            w.write([{"mst": mst, "xml": get(f"{BASE}/lawService.do?{q}").decode("utf-8")}])
+            xml = get(f"{BASE}/lawService.do?{q}").decode("utf-8")
         except Exception as e:
             print(f"[stmd] {mst} 실패: {e}", flush=True)
+            return
+        ids = tree_law_ids(xml)
+        if law_id not in ids:
+            print(f"[stmd] {mst} 체계도에 자기 법령이 없음 — 건너뜀", flush=True)
+            return
+        w.write([{"mst": mst, "xml": xml}])
+        with lock:
+            covered.update(ids)
 
-    run_pool(todo, fn, workers, "stmd")
+    rows = laws()
+    for label, pick in (("stmd 법률", lambda k: k == "법률"), ("stmd 나머지", lambda k: k != "법률")):
+        todo = [(m, i) for m, i, k in rows if pick(k) and i not in covered]
+        print(f"[{label}] 남은 {len(todo)}건", flush=True)
+        run_pool(todo, fn, workers, label)
 
 
 def _as_list(v):

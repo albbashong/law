@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings>=2.14",
     "pyyaml>=6.0",
     "kiwipiepy>=0.24.1",
+    "numpy>=2.0",
 ]
 
 [project.scripts]

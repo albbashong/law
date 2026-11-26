@@ -113,12 +113,9 @@ VARIANTS = 2       # 낱말마다 쓰는 법령 용어 꼴 수
 
 
 def _query_words(query: str) -> list[str]:
-    """띄어 쓴 낱말(공백·따옴표 없앰, 끝에 붙은 조사는 뗌)."""
-    out = []
-    for tok in query.split():
-        t = nospace(tok).replace('"', "")
-        cut = next((n for n in range(len(t) - 1, 1, -1) if t[n:] in PARTICLES), len(t))
-        out.append(t[:cut])
+    """띄어 쓴 낱말(공백·따옴표 없앰, 뒤에 붙은 조사·어미는 형태소 분석으로 뗌)."""
+    from law_mcp.engine.words import stem
+    out = [stem(nospace(tok).replace('"', "")) for tok in query.split()]
     return list(dict.fromkeys(w for w in out if w))
 
 
@@ -175,29 +172,25 @@ def _basis_hint(store, query: str, region: str | None) -> dict | None:
     return {"tool": "building_basis", "args": {"use": use, "zone": zone, "region": region}}
 
 
-# 낱말 끝에 붙는 조사 — 이것만 떼고 비교한다(더 긴 낱말의 앞부분을 용어로 오인하지 않도록)
-PARTICLES = {"이", "가", "은", "는", "을", "를", "의", "과", "와", "에", "로", "으로", "에서", "이란", "란",
-             "이랑", "랑", "이라는", "라는", "이야", "야", "에서의", "에서는"}
-
-
 def _definition_hint(store, query: str) -> dict | None:
     """질의 낱말(붙은 조사는 뗀다)이 법률이 정의한 용어면 law_definition 호출을 권한다.
 
     법령은 '금품등'·'공개공지등'처럼 '…등'을 붙여 용어를 정의하므로 그 꼴도 같은 용어로 본다. 여러 낱말이
     걸리면 정의한 법령이 적은(더 특정한) 용어를 고른다 — 흔한 '공무원'보다 '금품등'."""
     from law_mcp.engine.permits import definitions
+    from law_mcp.engine.words import stem
     laws: dict[str, set] = {}
     for d in definitions(store):
         laws.setdefault(d["term"], set()).add(d["doc_id"])
     found = []
     for i, tok in enumerate(query.split()):
         t = nospace(tok)
-        for n in range(len(t), 1, -1):
-            if n == len(t) or t[n:] in PARTICLES:
-                term = next((x for x in (t[:n], t[:n] + "등") if x in laws), None)
-                if term:
-                    found.append((len(laws[term]), i, term))
-                    break
+        # 낱말 그대로, 또는 붙은 조사를 뗀 것 — 더 긴 낱말의 앞부분('건축물대장'의 '건축물')을 용어로 오인하지 않는다
+        for head in dict.fromkeys((t, stem(t))):
+            term = next((x for x in (head, head + "등") if x in laws), None)
+            if term:
+                found.append((len(laws[term]), i, term))
+                break
     return {"tool": "law_definition", "args": {"term": min(found)[2]}} if found else None
 
 
@@ -225,8 +218,15 @@ RRF_K = 60     # 순위 융합 상수(관례값) — 1/(K+순위) 를 더한다
 SPLIT_POOL = 3  # 법령·자치법규로 나눌 때 모으는 후보 배수 — 한쪽이 상위를 독차지해도 다른 쪽이 남게
 
 
+def _rankers(method: str) -> list[str]:
+    """SEARCH_METHOD → 순위를 낼 방식들. '+' 로 잇는다(trigram+vector). hybrid 는 예전 이름(trigram+words)."""
+    if method.strip() == "hybrid":
+        return ["trigram", "words"]
+    return [m.strip() for m in method.split("+") if m.strip()] or ["trigram"]
+
+
 def _by_method(store, query: str, scope: str, region: str | None, limit: int) -> dict:
-    """설정(SEARCH_METHOD)에 따라 찾는다. 낱말 색인을 못 쓰면 trigram 결과를 그대로 낸다.
+    """설정(SEARCH_METHOD)의 방식들로 찾아 순위를 융합(RRF)한다. 색인을 못 쓰는 방식은 빠지고, 남는 게 없으면 trigram 결과를 낸다.
     SEARCH_SPLIT_SOURCES 면 후보를 넉넉히 모아 법령·자치법규를 limit 개씩 나눠 법령부터 담는다."""
     s = get_settings()
     split = s.search_split_sources and not region      # 지역을 주면 조례만 찾는다
@@ -235,17 +235,21 @@ def _by_method(store, query: str, scope: str, region: str | None, limit: int) ->
     if base["status"] != "ok":
         return base
     rows = base["facts"].get("결과", [])
-    found = None if s.search_method == "trigram" else _words_rows(store, query, scope, region, want * 2)
-    if found is not None and s.search_method == "words":
-        rows = found or rows
-    elif found is not None:   # hybrid
+    lists = []
+    for m in _rankers(s.search_method):
+        found = rows if m == "trigram" else RANKERS[m](store, query, scope, region, want * 2) if m in RANKERS else None
+        if found:
+            lists.append(found)
+    if len(lists) > 1:
         score, row = {}, {}
-        for lst in (rows, found):
+        for lst in lists:
             for i, r in enumerate(lst):
                 k = (r["law"], r["article"])
                 score[k] = score.get(k, 0) + 1 / (RRF_K + i + 1)
                 row.setdefault(k, r)
         rows = [row[k] for k in sorted(score, key=lambda k: -score[k])]
+    elif lists:
+        rows = lists[0]
     rows = _split_sources(store, rows, limit) if split else rows[: limit * 2]
     return result("ok", {**base["facts"], "결과": rows}, base["message"])
 
@@ -265,7 +269,7 @@ def _words_rows(store, query: str, scope: str, region: str | None, limit: int) -
     """낱말 색인으로 찾은 조문·별표 — 지역·범위 안의 것만. 색인을 못 쓰면 None."""
     from law_mcp.engine import words
     s = get_settings()
-    hits = words.search(s.words_db_path, query, s.words_title_weight, POOL // 5)
+    hits = words.search(s.words_db_path, query, s.words_title_weight, POOL // 5, source=store.built_at())
     if hits is None:
         return None
     docs = None
@@ -284,6 +288,18 @@ def _words_rows(store, query: str, scope: str, region: str | None, limit: int) -
         if len(kept) >= limit:
             break
     return _hit_rows(store, kept, query)
+
+
+def _vector_rows(store, query: str, scope: str, region: str | None, limit: int) -> list[dict] | None:
+    """뜻으로 찾은 법령 조문. 색인에 자치법규가 없으므로 지역(조례만)·자치법규 범위에서는 보태지 않는다(None)."""
+    if region or scope == "ordin":
+        return None
+    from law_mcp.engine import vectors
+    hits = vectors.search(get_settings().vector_dir, query, limit, source=store.built_at())
+    return None if hits is None else _hit_rows(store, hits, query)
+
+
+RANKERS = {"words": _words_rows, "vector": _vector_rows}
 
 
 def _hit_rows(store, hits, query):

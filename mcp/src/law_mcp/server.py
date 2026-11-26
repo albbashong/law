@@ -3,6 +3,7 @@
 도구 모듈은 ``register(mcp, get_store) -> None`` 계약을 지킨다.
 """
 import logging
+import threading
 from importlib.metadata import version as _pkg_version
 
 import uvicorn
@@ -31,14 +32,36 @@ INSTRUCTIONS = """\
 _store_cache: dict = {}
 
 
+_store_lock = threading.Lock()
+
+
 def get_store() -> Store:
     path = get_settings().law_db_path
-    st = _store_cache.get(path)
-    if st is None:
-        st = Store(path)
-        _store_cache.clear()
-        _store_cache[path] = st
+    with _store_lock:     # 시작 때 미리 만드는 스레드와 첫 요청이 Store 를 따로 만들지 않게
+        st = _store_cache.get(path)
+        if st is None:
+            st = Store(path)
+            _store_cache.clear()
+            _store_cache[path] = st
     return st
+
+
+def _warm_store() -> None:
+    """제목 색인(과 쓰면 임베딩 색인)을 미리 만든다 — 재시작 뒤 첫 law_search 가 색인 만들기를 기다리지 않게."""
+    try:
+        get_store().warm()
+    except StoreUnavailable:
+        pass     # DB 가 없으면 /health 가 503 으로 알린다
+    except Exception:  # noqa: BLE001 — 미리 만들기 실패는 첫 검색에서 다시 만든다
+        logging.getLogger(__name__).exception("title index warm-up failed")
+    from law_mcp.tools.search import _rankers
+    s = get_settings()
+    if "vector" in _rankers(s.search_method):     # 임베딩 색인(약 0.8GB)도 첫 검색 전에 읽어 둔다
+        try:
+            from law_mcp.engine import vectors
+            vectors.warm(s.vector_dir)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("vector index warm-up failed")
 
 
 def _tool_modules():
@@ -89,6 +112,7 @@ def build_app():
                                              allowed_origins=s.mcp_allowed_origins)
     app = build_server().streamable_http_app(stateless_http=True, host=s.mcp_host,
                                              transport_security=security)
+    threading.Thread(target=_warm_store, name="warm-store", daemon=True).start()
     return with_caller(app)
 
 

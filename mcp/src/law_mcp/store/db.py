@@ -5,6 +5,14 @@ import threading
 from pathlib import Path
 
 
+# 제목 색인에 담을 행 — 제목만 든 부분 인덱스(ix_unit_title·ix_annex_title)로 읽어 본문(9GB)을 훑지 않는다.
+TITLE_SOURCES = (
+    "SELECT 'u', unit_id, doc_id, replace(title,' ','') FROM unit"
+    " WHERE title IS NOT NULL AND title!='' AND path NOT LIKE '%/%'",
+    "SELECT 'a', annex_id, doc_id, replace(title,' ','') FROM annex WHERE title IS NOT NULL AND title!=''",
+)
+
+
 class StoreUnavailable(RuntimeError):
     pass
 
@@ -24,6 +32,7 @@ class Store:
         self._local = threading.local()
         self.db     # 파일을 열 수 있는지 지금 확인한다
         self._tix, self._tix_lock, self._df = None, threading.Lock(), {}
+        self._hier = None
         self._tq_lock = threading.Lock()     # 메모리 제목 색인은 연결이 하나 — 조회를 한 번에 하나씩
 
     @property
@@ -115,17 +124,43 @@ class Store:
         return {r[0] for r in self.db.execute(
             "SELECT DISTINCT to_doc FROM link WHERE from_doc=? AND kind='인용' AND to_doc<>?", (doc_id, doc_id))}
 
-    def doc_links(self, doc_id, kind="체계"):
-        return self._all("SELECT * FROM link WHERE (from_doc=? OR to_doc=?) AND kind=? AND from_path IS NULL",
-                         (doc_id, doc_id, kind))
+    # 법령 체계(법제처 법령체계도) — 법률 ← 시행령 ← 시행규칙
+    def _tree(self) -> tuple[dict, dict]:
+        if self._hier is None:
+            up, down = {}, {}
+            for r in self.db.execute("SELECT from_doc, to_doc FROM link WHERE kind='체계' AND from_path IS NULL"):
+                up[r[0]] = r[1]
+                down.setdefault(r[1], []).append(r[0])
+            self._hier = (up, down)
+        return self._hier
+
+    def uppers(self, doc_id) -> list[int]:
+        """이 법령의 상위 법령들 — 바로 위부터."""
+        up, out = self._tree()[0], []
+        while doc_id in up and up[doc_id] not in out:
+            doc_id = up[doc_id]
+            out.append(doc_id)
+        return out
+
+    def lowers(self, doc_id) -> list[int]:
+        """이 법령의 하위 법령들 — 가까운 단계부터."""
+        down, out, layer = self._tree()[1], [], [doc_id]
+        while layer:
+            layer = [k for d in layer for k in down.get(d, []) if k not in out]
+            out += layer
+        return out
+
+    def law_root(self, doc_id) -> int:
+        """같은 체계의 맨 위 법령 — 두 법령이 한 계열인지 볼 때 쓴다."""
+        return (self.uppers(doc_id) or [doc_id])[-1]
 
     # 지역·용도지역
     def region_plan(self, region):
         return self._all("SELECT r.region, r.sido, d.doc_id, d.name, d.org FROM region_plan r"
                          " JOIN doc d ON d.doc_id=r.doc_id WHERE r.region=?", (region,))
 
-    def sido_known(self, sido) -> bool:
-        return self._one("SELECT 1 FROM region_plan WHERE sido=? LIMIT 1", (sido,)) is not None
+    def sidos(self) -> list[str]:
+        return [r["sido"] for r in self._all("SELECT DISTINCT sido FROM region_plan ORDER BY sido")]
 
     def zone(self, zone):
         return self._one("SELECT * FROM zone_map WHERE zone=?", (nospace(zone),))
@@ -170,13 +205,14 @@ class Store:
                 mem = sqlite3.connect(":memory:", check_same_thread=False)
                 mem.execute("CREATE TABLE t(kind TEXT, ref INT, doc INT, src TEXT, s TEXT)")
                 src = {d: so for d, so in self.db.execute("SELECT doc_id, source FROM doc")}
-                rows = self.db.execute("SELECT 'u', unit_id, doc_id, replace(title,' ','') FROM unit"
-                                       " WHERE title IS NOT NULL AND title!='' AND path NOT LIKE '%/%'").fetchall()
-                rows += self.db.execute("SELECT 'a', annex_id, doc_id, replace(coalesce(title,''),' ','') FROM annex"
-                                        " WHERE title IS NOT NULL AND title!=''").fetchall()
+                rows = [r for sql in TITLE_SOURCES for r in self.db.execute(sql)]
                 mem.executemany("INSERT INTO t VALUES (?,?,?,?,?)", [(k, r, d, src.get(d), t) for k, r, d, t in rows])
                 self._tix = mem
             return self._tix
+
+    def warm(self) -> None:
+        """서버가 뜰 때 제목 색인을 미리 만든다 — 첫 law_search 가 기다리지 않게."""
+        self._titles()
 
     def title_df(self, word):
         """그 낱말이 든 제목 수 — 드문 낱말일수록 제목 점수를 크게 준다."""
@@ -249,6 +285,10 @@ class Store:
         rows += self._all(f"SELECT 'a' AS kind, annex_id AS ref, doc_id, {score} AS score FROM annex"
                           f" WHERE doc_id IN ({marks}) AND score > 0", list(words) + list(doc_ids))
         return sorted(rows, key=lambda r: -r["score"])[:limit]
+
+    def built_at(self) -> str | None:
+        """이 DB 를 만든 시각 — 딸린 색인(낱말·임베딩)이 같은 빌드의 것인지 대조한다."""
+        return (self._one("SELECT v FROM meta WHERE k='built_at'") or {}).get("v")
 
     def health(self):
         return {"docs": self.db.execute("SELECT count(*) FROM doc").fetchone()[0],

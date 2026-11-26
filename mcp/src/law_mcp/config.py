@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     facts_max_chars: int = 7600
     excerpt_chars: int = 400
     follow_depth: int = 2
+    original_max_chars: int = 2500     # law_article 원문 한도 — 넘으면 자르고 facts.생략에 적는다
+    parcel_regulations_max: int = 12   # 필지 기타규제마다 근거 조문을 붙이는 수 — 넘는 것은 이름만 facts.생략에
+    conditions_max: int = 8            # building_basis 조건 수
     # law_route — 열어 볼 순서: 따라갈 깊이 · 단계 상한 · '꼭 열기'로 칠 관계(follow 가 매기는 관계 이름, 쉼표)
     route_depth: int = 3
     route_steps_max: int = 12
@@ -37,10 +40,19 @@ class Settings(BaseSettings):
     law_name_fix_margin: float = 0.05
     # 필지 규제 이름이 이보다 많은 조문 제목에 나오면(도로·공원처럼 흔한 말) 근거 조문을 붙이지 않는다 — 이름만 남긴다
     regulation_title_df_max: int = 1000
-    # law_search 방식 — trigram(lawdb 의 세 글자 조각 색인) · words(형태소 낱말 색인, words_db_path) · hybrid(둘을 순위 융합).
+    # law_search 방식 — trigram(lawdb 의 세 글자 조각 색인) · words(형태소 낱말 색인, words_db_path) · vector(뜻, vector_dir) 를
+    # '+' 로 이어 순위 융합(예: trigram+vector). hybrid 는 trigram+words.
     # 낱말 색인 파일이나 분석기가 없으면 trigram 으로 찾는다. 낱말 색인은 scripts/build_words.py 로 만든다.
     search_method: str = "trigram"
     words_db_path: Path = ROOT / "data" / "lawdb_words.sqlite"
+    # 뜻으로 찾기(SEARCH_METHOD 에 vector) — 법령 조문 임베딩 색인(scripts/build_vectors.py)과 검색어를 임베딩할 곳(OpenAI 호환)
+    vector_dir: Path = ROOT / "data" / "lawdb_vec"
+    embed_url: str = "http://localhost:11434/v1"
+    embed_model: str = "qwen3-embedding:0.6b"
+    embed_api_key: str = ""
+    embed_timeout_sec: float = 30.0
+    embed_query_prefix: str = ("Instruct: Given a question about Korean law, retrieve the statute article that answers it\n"
+                               "Query: ")
     # 결과를 법령·자치법규로 나눠(각 limit 개, 법령 먼저) 담는다 — 수가 10배 넘는 시군 조례가 법령 조문을 덮지 않게
     search_split_sources: bool = False
     words_title_weight: float = 10.0  # 제목 칸 가중 — 실측(자동 평가 300문항) 2·5·10 중 10 이 가장 나았다

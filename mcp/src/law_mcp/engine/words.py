@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 CONTENT = ("NNG", "NNP", "XR", "SL", "SN", "SH", "VV", "VA")   # 낱말로 남기는 품사(명사·어근·외국어·숫자·한자·용언 어간)
 NOUN = ("NNG", "NNP", "XR")                                   # 이어지면 붙여 복합어로도 남기는 품사
+STEM_KEEP = ("NNG", "NNP", "NNB", "NR", "XR", "XSN", "SL", "SN", "SH")   # 낱말의 몸(체언·어근·접미사·외국어·숫자·한자)
 BRIDGE = "J"   # 명사 사이에 이 품사(조사) 하나만 끼면 건너뛰어 잇는다 — 제목 "도로의 점용 허가" ↔ 검색어 "도로점용허가"
 JOIN_MAX = 3                                                  # 복합어로 붙이는 명사 수 상한
 PIECE = 3000   # 긴 본문(별표 표)은 줄 단위로 이만큼씩 나눠 분석한다 — 통째로 넣으면 분석기 메모리가 커져 프로세스가 죽었다
@@ -45,6 +46,17 @@ def _joined(run: list[str]) -> list[str]:
     return ["".join(run[i:j]) for i in range(len(run)) for j in range(i + 2, min(i + JOIN_MAX + 1, len(run) + 1))]
 
 
+def stem(token: str) -> str:
+    """띄어 쓴 한 낱말에서 뒤에 붙은 조사·어미를 뗀 것 — 형태소 분석으로 마지막 체언까지만 남긴다("용도지역에서의" →
+    "용도지역"). 체언이 없거나(용언) 분석기를 못 쓰면 그대로 둔다. 조사 목록으로 끝을 떼면 명사가 잘린다(건축허가 → 건축허)."""
+    try:
+        ends = [t.start + t.len for t in _analyzer().tokenize(token) if t.tag.split("-")[0] in STEM_KEEP]
+    except Exception as e:  # noqa: BLE001 — 분석기 문제는 검색을 멈추지 않는다
+        logger.warning("analyzer unavailable for stem: %s", e)
+        return token
+    return token[:max(ends)] if ends else token
+
+
 def words(text: str) -> list[str]:
     out = []
     for piece in _pieces(text):
@@ -65,7 +77,7 @@ def words(text: str) -> list[str]:
     return out
 
 
-def _open(path: Path):
+def _open(path: Path, source: str | None = None):
     """색인 연결 — 파일이 없거나 분석기가 없으면 None(부르는 쪽은 trigram 으로 돌아간다).
     연결은 스레드마다 — 도구가 여러 작업 스레드에서 동시에 불린다(연결 하나를 같이 쓰면 조회가 깨진다)."""
     key = (str(path), threading.get_ident())
@@ -75,6 +87,11 @@ def _open(path: Path):
             try:
                 _analyzer()
                 conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                stamp = _stamp(conn)
+                if source is not None and stamp != source:   # 다른 빌드의 색인은 조문 번호가 어긋난다
+                    logger.warning("words index is from DB build %s, not %s — rebuild it (scripts/build_words.py)",
+                                   stamp, source)
+                    conn = None
             except Exception as e:  # noqa: BLE001 — 분석기 설치·색인 파일 문제는 검색을 멈추지 않는다
                 logger.warning("words index unavailable: %s", e)
         else:
@@ -83,9 +100,18 @@ def _open(path: Path):
     return _index[key]
 
 
-def search(path: Path, query: str, title_weight: float, limit: int) -> list[dict] | None:
-    """[{kind: u|a, ref, score}] 를 bm25 순으로(작을수록 앞). 색인을 못 쓰면 None."""
-    conn = _open(path)
+def _stamp(conn) -> str | None:
+    try:
+        return (conn.execute("SELECT v FROM meta WHERE k='built_at'").fetchone() or [None])[0]
+    except sqlite3.Error:
+        return None
+
+
+def search(path: Path, query: str, title_weight: float, limit: int, source: str | None = None) -> list[dict] | None:
+    """[{kind: u|a, ref, score}] 를 bm25 순으로(작을수록 앞). 색인을 못 쓰면 None.
+
+    source 는 지금 쓰는 DB 의 빌드 시각 — 색인이 다른 빌드에서 만들어졌으면 쓰지 않는다."""
+    conn = _open(path, source)
     if conn is None:
         return None
     toks = list(dict.fromkeys(words(query)))
@@ -112,6 +138,10 @@ def build_words_index(src: Path, out: Path, procs: int = 8, log=print) -> None:
     dst.execute("PRAGMA synchronous=NORMAL")
     jobs = [("w_unit", "SELECT unit_id, title, text FROM unit WHERE path NOT LIKE '%/%'"),
             ("w_annex", "SELECT annex_id, title, text FROM annex")]
+    dst.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    dst.execute("DELETE FROM meta")              # 다 만든 뒤에 적는다 — 만들다 만 색인은 쓰이지 않는다
+    dst.commit()
+    stamp = (db.execute("SELECT v FROM meta WHERE k='built_at'").fetchone() or [None])[0]
     t0 = time.perf_counter()
     pool = mp.Pool(procs) if procs > 1 else None
     try:
@@ -129,6 +159,11 @@ def build_words_index(src: Path, out: Path, procs: int = 8, log=print) -> None:
             dst.execute(f"INSERT INTO {table}({table}) VALUES('optimize')")
             dst.commit()
             log(f"{table} done {n} {time.perf_counter() - t0:.0f}s")
+        dst.execute("INSERT INTO meta VALUES ('built_at', ?)", (stamp,))
+        dst.commit()
     finally:
         if pool:
             pool.close()
+        db.close()
+        dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # 파일 하나로 옮길 수 있게 — 갱신이 다 만든 뒤 바꿔 끼운다
+        dst.close()

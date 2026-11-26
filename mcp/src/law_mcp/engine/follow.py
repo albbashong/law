@@ -9,7 +9,7 @@ import re
 from collections import deque
 from dataclasses import dataclass, field
 
-RANK = {"헌법": 0, "법률": 1, "대통령령": 2, "총리령": 3, "조례": 5, "규칙": 6}
+ORDINANCE = "조례"      # 자치법규 종류(법제처 분류) — 조례가 규칙·훈령 위에 있다
 ORDIN_DELEGATION = re.compile(r"(도시ㆍ군계획조례|도시·군계획조례|조례)\s*(로|으로|가|에서)\s*정")
 ANNEX_REL = re.compile(r"제\s*(\d+)\s*조(?:의\s*(\d+))?(?:\s*제\s*(\d+)\s*항)?(?:\s*제\s*(\d+)\s*호)?\s*(?:관련|관계)")
 MAX_NEIGHBORS = 6
@@ -44,10 +44,18 @@ class FollowResult:
     visited: set = field(default_factory=set)
 
 
-def rank(kind: str | None) -> int:
-    if not kind:
-        return 9
-    return RANK.get(kind, 4 if kind.endswith("령") else 9)
+def above(store, upper: dict, lower: dict) -> bool:
+    """upper 가 lower 의 상위 법령인가 — 법령끼리는 법령체계도, 자치법규는 법령 아래, 자치법규끼리는 조례가 위."""
+    if lower["source"] == "law":
+        return upper["doc_id"] in store.uppers(lower["doc_id"])
+    if upper["source"] == "law":
+        return True
+    return upper["kind"] == ORDINANCE and lower["kind"] != ORDINANCE
+
+
+def tier(store, doc_id: int) -> int:
+    """법령 체계에서 몇 단계 아래인가 — 법률 0, 시행령 1, 시행규칙 2."""
+    return len(store.uppers(doc_id))
 
 
 def node(store, doc_id: int, path: str) -> Ref | None:
@@ -70,11 +78,6 @@ def node(store, doc_id: int, path: str) -> Ref | None:
     if not u:
         return None
     return Ref(doc_id, path, d["name"], u["label"], u["title"] or "", u["text"] or "", "", "")
-
-
-def family(name: str) -> str:
-    """'건축법 시행령' → '건축법' — 법률·시행령·시행규칙을 한 계열로 본다."""
-    return re.sub(r"\s*시행(령|규칙)$", "", name or "")
 
 
 def _jo(path: str) -> str:
@@ -185,11 +188,9 @@ def _up(store, ref: Ref) -> list[tuple[int, str, str]]:
         if l["kind"] == "조례연계" and cited and l["to_doc"] not in cited:
             continue
         target = store.doc(l["to_doc"])
-        # 상위 = 위임한 쪽 — 같은 법령 계열(법률→시행령→시행규칙)이거나, 자치법규가 인용한 법령.
-        # 다른 계열 법령을 정의 등으로 인용한 것은 순위가 높아도 위임 근거가 아니다
-        upper = rank(target["kind"]) < rank(me["kind"]) and (
-            me["source"] == "ordin" or family(target["name"]) == family(me["name"]))
-        rel = "상위" if upper else "인용"
+        # 상위 = 위임한 쪽 — 법령체계도에서 이 법령 위에 있는 법령이거나, 자치법규가 인용한 법령.
+        # 다른 계열 법령을 정의 등으로 인용한 것은 위임 근거가 아니다
+        rel = "상위" if above(store, target, me) else "인용"
         if l["kind"] == "조례연계" and not cited:
             out.append((l["to_doc"], l["to_path"], rel, "법제처 연계 — 조문에 직접 인용은 없음. 위임 근거인지 원문 확인"))
             continue
@@ -224,8 +225,8 @@ def _down(store, ref: Ref, region_doc_id, res: FollowResult) -> list[tuple[int, 
             if l["kind"] == "조례연계" and ref.doc_id not in store.cited_docs(l["from_doc"]):
                 continue   # lnkLsOrdJo 잡음
             out.append((l["from_doc"], l["from_path"], "조례"))
-        elif rank(src["kind"]) > rank(me["kind"]) and family(src["name"]) == family(me["name"]):
-            # 하위 = 같은 법령 계열의 시행령·시행규칙. 다른 법령이 이 조문을 인용하는 것은 하위가 아니다
+        elif above(store, me, src):
+            # 하위 = 법령체계도에서 이 법령 아래에 있는 시행령·시행규칙. 다른 법령이 이 조문을 인용하는 것은 하위가 아니다
             out.append((l["from_doc"], l["from_path"], "하위"))
     # 같은 조에서 나온 여러 연결은 하나로(가장 얕은 경로), 위임 문구를 받는 조문을 앞으로
     best = {}

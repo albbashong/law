@@ -192,3 +192,11 @@ async def test_bad_memory_is_ignored():
     model = FakeModel([{"answer": "답"}])
     await loop.run_query("q", mcp=FakeMcp(), model=model, context={"memory": "문자열"})
     assert [m["role"] for m in model.seen[0]] == ["system", "user"]
+
+
+async def test_turn_that_starts_a_new_subject_is_marked():
+    raw = {**done("답", [CALL]), "topic_start": True}
+    client, store = client_for(Recorder(raw))
+    async with client:
+        task = await finish(client, store, [{"text": "수의계약 조건"}])
+    assert memory_of(task)["turns"][-1]["topic"] is True

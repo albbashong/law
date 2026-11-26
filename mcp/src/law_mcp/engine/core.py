@@ -5,13 +5,6 @@
 from law_mcp.engine.follow import Ref, node
 
 
-def upper_doc(store, doc_id: int) -> int | None:
-    """그 법령이 가장 많이 인용하는 다른 법령 — 시행령이면 위임한 법률."""
-    row = store._one("SELECT to_doc, count(*) n FROM link WHERE from_doc=? AND to_doc!=? GROUP BY to_doc"
-                     " ORDER BY n DESC LIMIT 1", (doc_id, doc_id))
-    return row["to_doc"] if row else None
-
-
 def core_articles(store, doc_id: int, n: int) -> list[Ref]:
     """같은 법의 다른 조문이 인용하는 수가 많은 조문 n 개를 조문 순서로."""
     if n <= 0:

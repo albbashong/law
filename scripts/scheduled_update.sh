@@ -50,6 +50,8 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 [ -n "${health:-}" ] || fail "law-mcp 가 :$port 에서 응답하지 않습니다 — '$COMPOSE logs law-mcp' 를 확인하세요."
+built=$(python3 -c "import sqlite3;print(sqlite3.connect('file:data/lawdb.sqlite?mode=ro',uri=True).execute(\"select v from meta where k='built_at'\").fetchone()[0])")
+case "$health" in *"$built"*) ;; *) fail "law-mcp 가 새 DB($built)를 읽지 않았습니다 — 재시작을 확인하세요: $health" ;; esac
 
 # 갱신 로그는 60일만 둔다
 find logs -maxdepth 1 -name 'update-*.log' -mtime +60 -delete

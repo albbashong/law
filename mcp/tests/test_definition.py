@@ -34,3 +34,11 @@ def test_compound_term_falls_back_to_defined_part(store):
     assert r["status"] == "ok"
     assert r["facts"]["정의"][0]["용어"] == "용도지역"
     assert "용도지역" in r["message"]
+
+
+def test_definition_with_hanja_after_the_term_is_read():
+    """도로교통법 제2조: '"보도"(步道)란 …' — 따옴표 뒤 한자 괄호 때문에 보도·차도 정의를 놓치고 방송법 '보도'만 나왔다."""
+    from law_mcp.engine.permits import DEF
+    m = DEF.search('10. "보도"(步道)란 연석선, 안전표지나 그와 비슷한 인공구조물로 경계를 표시하여 보행자가 통행할 수 있도록 한 도로의 부분을 말한다.')
+    assert m and m.group(1) == "보도"
+    assert DEF.search('4. "차도"(車道)란 연석선(차도와 보도를 구분하는 돌 등으로 이어진 선을 말한다. 이하 같다)').group(1) == "차도"

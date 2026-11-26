@@ -65,3 +65,11 @@ def test_split_sources_keeps_laws_from_being_buried_by_ordinances(monkeypatch, s
     src = ["ordin" if store.doc_named(r["law"])["source"] == "ordin" else "law" for r in rows]
     assert src[:src.count("law")] == ["law"] * src.count("law")      # 법령 묶음이 먼저
     assert 0 < src.count("law") <= 4 and src.count("ordin") <= 4
+
+
+def test_words_index_built_from_another_db_build_is_not_used(monkeypatch, store, words_db):
+    from law_mcp.engine import words
+    monkeypatch.setattr(words, "_index", {})
+    assert words.search(words_db, "건축허가", 10.0, 5, source=store.built_at())
+    monkeypatch.setattr(words, "_index", {})
+    assert words.search(words_db, "건축허가", 10.0, 5, source="1999-01-01 00:00:00") is None

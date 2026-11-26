@@ -1,0 +1,103 @@
+# 일상어 질문 20개 — eval/search/sets/daily270.json 에서 조문 제목·법령명과 겹치는 낱말이 없는 것을 시드 20261119 로 뽑았다.
+# 질문은 모델이 조문을 보고 만든 일상어(make_daily_set.py), 정답은 그 조문. 손으로 고른 사례가 아니다.
+
+- id: D01
+  kind: daily
+  utterance: "민간 위원이 2년 임기 끝나면 재임할 수 있나요?"
+  must_refs:
+    - {law: "지속가능한 기반시설 관리 기본법 시행규칙", article: "제5조"}
+- id: D02
+  kind: daily
+  utterance: "예상 세액 신고할 때 세액공제 못 받나요?"
+  must_refs:
+    - {law: "지방세특례제한법", article: "제169조"}
+- id: D03
+  kind: daily
+  utterance: "공공 급식에 좋은 천일염 쓰려면 어떻게 해야 하나요?"
+  must_refs:
+    - {law: "소금산업 진흥법", article: "제18조"}
+- id: D04
+  kind: daily
+  utterance: "벌을 못 내면 언제 어디서 일해야 하는지 어떻게 알려줘요?"
+  must_refs:
+    - {law: "자연재해대책법 시행령", article: "제5조의3"}
+- id: D05
+  kind: daily
+  utterance: "같은 비행기에 여러 사람 이름이 있으면 누가 먼저인가?"
+  must_refs:
+    - {law: "항공기등록령", article: "제3조"}
+- id: D06
+  kind: daily
+  utterance: "정부가 AI 서비스 제공 시 저작권 침해 시 어디에 진정하나요?"
+  must_refs:
+    - {law: "지능정보화 기본법", article: "제19조"}
+- id: D07
+  kind: daily
+  utterance: "핵폐기물시설지원금은언제지급돼요?"
+  must_refs:
+    - {law: "중ㆍ저준위방사성폐기물 처분시설의 유치지역지원에 관한 특별법 시행규칙", article: "제2조"}
+- id: D08
+  kind: daily
+  utterance: "수사관이 증거 보관 신청하려면 어떤 서류 써요?"
+  must_refs:
+    - {law: "국방과학기술혁신 촉진법 시행규칙", article: "제11조"}
+- id: D09
+  kind: daily
+  utterance: "체포 영장에 내 주민번호와 직업을 적나요? 그리고 이유도 들어가나요?"
+  must_refs:
+    - {law: "형사소송규칙", article: "제46조"}
+- id: D10
+  kind: daily
+  utterance: "해양사업평가서에의견반영됐는지어떻게확인하나요?"
+  must_refs:
+    - {law: "해양이용영향평가법 시행규칙", article: "제12조"}
+- id: D11
+  kind: daily
+  utterance: "새 스마트폰 안테나 검사받으려면 어디에 신청해야 해?"
+  must_refs:
+    - {law: "과학기술정보통신부와 그 소속기관 직제", article: "제25조"}
+- id: D12
+  kind: daily
+  utterance: "외환 교환에 대해 정부가 정하는 내용은 뭘까?"
+  must_refs:
+    - {law: "국제환규칙", article: "제6조"}
+- id: D13
+  kind: daily
+  utterance: "신탁업자가 사임하려면 어떤 서류를 제출해야 하나요?"
+  must_refs:
+    - {law: "담보부사채신탁법시행규칙", article: "제7조"}
+- id: D14
+  kind: daily
+  utterance: "해양오염 정화 작업을 여러 시·도가 같이 담당하면 어떻게 정해?"
+  must_refs:
+    - {law: "해양환경관리법 시행령", article: "제24조의2"}
+- id: D15
+  kind: daily
+  utterance: "해외 회사와 서비스 계약했는데 세무서가 어떤 서류 달라고 할까?"
+  must_refs:
+    - {law: "국제조세조정에 관한 법률 시행규칙", article: "제28조"}
+- id: D16
+  kind: daily
+  utterance: "꽃·식물 중에 관엽식물은 어떻게 정의돼요?"
+  must_refs:
+    - {law: "화훼산업 발전 및 화훼문화 진흥에 관한 법률 시행령", article: "제2조"}
+- id: D17
+  kind: daily
+  utterance: "행정처분 전에 미리 알려줘야 할 내용은?"
+  must_refs:
+    - {law: "행정절차법", article: "제21조"}
+- id: D18
+  kind: daily
+  utterance: "당내 경선에서 금품을 주고받으면 안 되는 이유는?"
+  must_refs:
+    - {law: "공직선거법", article: "제57조의5"}
+- id: D19
+  kind: daily
+  utterance: "연구개발특구에 참여할 수 있는 공공기관은 어디야?"
+  must_refs:
+    - {law: "연구개발특구의 육성에 관한 특별법 시행령", article: "제3조"}
+- id: D20
+  kind: daily
+  utterance: "온라인 입찰에서 예정가격 기준 자료를 어디서 받아야 하나요?"
+  must_refs:
+    - {law: "전자조달의 이용 및 촉진에 관한 법률 시행령", article: "제9조"}

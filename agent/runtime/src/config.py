@@ -240,6 +240,15 @@ class Settings(BaseSettings):
         default="아직 사용자에게 묻지 않았습니다. 앞의 {name} 결과는 사용자가 아니라 당신이 '{key}'에서 질문의 뜻에 가장 "
         "가까운 것을 골라 다시 호출하라고 했습니다. 하나 골라 {name} 를 다시 부르고, 답변에 어떻게 해석했는지 밝히세요.",
         description="pick 표시가 있는 결과 뒤 ask_user 를 한 번 돌려보낼 때 주는 안내.")
+    args_unreadable_text: str = Field(
+        default="{name} 호출의 인자를 읽지 못했습니다(JSON 형식이 깨짐). 조회하지 않았으니 인자를 올바른 JSON 으로 다시 호출하세요.",
+        description="도구 호출 인자가 JSON 으로 읽히지 않을 때 호출하지 않고 모델에게 되돌리는 문장({name}).")
+    empty_answer_text: str = Field(
+        default="답이 비었거나 끝까지 쓰이지 않았습니다. 지금까지 조회한 결과로 답을 처음부터 끝까지 다시 쓰세요. 길면 핵심만 줄여 씁니다.",
+        description="모델이 빈 글이나 토큰 한도에 끊긴 글을 답으로 냈을 때 한 번 돌려보내는 안내. 비우면 돌려보내지 않고 실패로 끝낸다.")
+    fail_empty_text: str = Field(
+        default="답을 끝까지 만들지 못했습니다. 질문을 나누어 다시 물어 주세요.",
+        description="다시 받아도 답이 비었거나 끊겨 태스크를 FAILED 로 끝낼 때 status.message.")
     last_round_text: str = Field(
         default="조회할 수 있는 횟수의 끝입니다. 더 조회하지 말고 지금까지 조회한 결과만으로 답하세요. 확인하지 못한 "
         "부분은 무엇을 찾아봤고 무엇을 확인하지 못했는지 밝히고, 조회 결과에 없는 조문은 인용하지 않습니다.",
@@ -273,8 +282,9 @@ class Settings(BaseSettings):
     )
     restate_follow_key: str = Field(
         default="",
-        description="질문 정리 JSON 에서 '앞 질문의 대상을 생략한 이어지는 질문' 판단(참/거짓)을 읽을 키. 참이고 작업 기억이 "
-        "있으면 앞 턴의 조회를 먼저 다시 실행해 근거를 놓는다. 비우면 쓰지 않는다.")
+        description="질문 정리 JSON 에서 이어지는 질문인지 읽을 키 — 값이 목록이면 '앞 질문에서 가져와 채운 말'로 보고, 앞 질문에 "
+        "있고 이번 발화에 없는 말이 있을 때만 이어짐, 참/거짓이면 그 판단을 쓴다. 이어짐이고 작업 기억이 있으면 앞 턴의 조회를 "
+        "먼저 다시 실행해 근거를 놓는다. 비우면 쓰지 않는다.")
     restate_tool_key: str = Field(
         default="",
         description="질문 정리 JSON 에서 '이 질문에 가장 먼저 부를 도구' 이름을 읽을 키. 채우면 정리 단계에 도구 목록(이름과 설명 "
@@ -317,8 +327,8 @@ class Settings(BaseSettings):
         default="", description="점검 답 JSON 에서 '답에 필요한데 아직 안 연 조문·별표' 목록의 키. 목록이 있으면 글만 고치게 두지 "
         "않고 다음 라운드에 조회를 꼭 하게 한다(맡긴 별표를 안 열고 '내용을 알 수 없다'고 답하는 것을 막는다). 비우면 쓰지 않는다.")
     answer_review_open_text: str = Field(
-        default="답에 필요한 내용이 아직 열지 않은 곳에 있습니다. 먼저 다음을 law_article 로 열어 확인하고 답하세요: {sources}",
-        description="점검이 열라고 한 조문·별표를 되돌리는 문장({sources}).")
+        default="답에 필요한 내용이 아직 열지 않은 곳에 있습니다. 먼저 다음을 조회 도구로 열어 확인하고 답하세요: {sources}",
+        description="점검이 열라고 한 조문·별표를 되돌리는 문장({sources}). 도구 이름은 런타임이 아니라 에이전트 설정에서 적는다.")
     answer_review_request_text: str = Field(
         default="[질문]\n{question}\n\n[답]\n{answer}\n\n[조회 원문]\n{sources}",
         description="답 점검에 넘기는 사용자 메시지 틀.")
@@ -337,16 +347,12 @@ class Settings(BaseSettings):
     answer_rate_check: bool = Field(
         default=False, description="답에 쓴 비율(%, N분의 M, 1/N)이 이번 조회 원문의 비율 값과 맞는지 대조한다(값 비교).")
     answer_rate_retry_text: str = Field(
-        default="답변의 다음 비율 수치는 조회한 원문의 어떤 값과도 맞지 않습니다: {rates}. 원문 표기(예: 1천분의 2.5)대로 "
-        "쓰거나 정확히 환산해(1천분의 2.5 = 0.25%) 다시 답하세요.",
+        default="답변의 다음 비율 수치는 조회한 원문의 어떤 값과도 맞지 않습니다: {rates}. 원문 표기대로 쓰거나 "
+        "환산식을 함께 적어 정확히 환산해 다시 답하세요.",
         description="비율 수치가 맞지 않을 때 모델에게 되돌리는 문장.")
     answer_condition_check: bool = Field(
-        default=False, description="답의 조건(수치·단위·비교어)을 조회 원문의 같은 값 조건과 조건식(방향 × 효과)으로 대조해, "
-        "어느 원문과도 반대인 것을 되돌린다. 같은 값에 원문끼리 부호가 엇갈리면 판단하지 않는다.")
-    answer_condition_retry_text: str = Field(
-        default="답의 다음 조건은 조회 원문과 방향(이상·이하·미만·초과)이나 효과(할 수 있다·없다)가 반대입니다: {conds}. "
-        "원문의 비교어와 효과를 그대로 따라 그 문장만 고쳐 다시 답하세요.",
-        description="조건 방향이 원문과 반대일 때 모델에게 되돌리는 문장.")
+        default=False, description="답과 조회 원문이 같은 (값, 단위)를 서로 다른 비교어(이상·초과 ↔ 이하·미만)로 적은 곳을 "
+        "답 점검(ANSWER_REVIEW_PROMPT)에 의심 후보로 넘긴다. 런타임은 뜻을 판정하지 않는다 — 점검 단계가 없으면 아무 일도 하지 않는다.")
     arg_grounded_keys: str = Field(
         default="",
         description="값이 사용자 발화·도구 결과에 나온 것이어야 하는 인자 이름(쉼표 구분, 예: address,region). "
@@ -373,6 +379,11 @@ class Settings(BaseSettings):
         "호출자가 memory 를 data 파트로 보내면 그것이 우선한다. 호출자가 지원하면 끈다.",
     )
     memory_local_max: int = Field(default=500, description="대비책이 들고 있는 대화(contextId) 수 상한.")
+    lookup_cache_ttl_sec: float = Field(
+        default=0, description="같은 질문을 다시 물을 때 앞서 검사를 통과한 턴의 조회를 첫 라운드에 다시 실행하는 기간(초). "
+        "열쇠는 정리된 질문(띄어쓰기·문장부호 무시). 답은 재사용하지 않고 원문을 다시 받는다. 0 이면 끈다.")
+    lookup_cache_max: int = Field(default=500, description="들고 있는 질문 수 상한(오래된 것부터 버린다).")
+    lookup_cache_file: str = Field(default="", description="재시작해도 남게 저장할 JSON 파일 경로({agent} 는 에이전트 이름). 비우면 메모리에만.")
     memory_heading: str = Field(
         default="[이전 작업] 같은 대화에서 앞서 처리한 질문들입니다. 이어지는 질문이면 이것을 바탕으로 부족한 "
         "부분만 더 조회하세요. 여기 있는 조문을 다시 인용하려면 조회 인자로 다시 조회해 원문을 확인하세요.",
@@ -406,6 +417,11 @@ class Settings(BaseSettings):
         "열거나(호출 인자) 그 도구를 부르면 공통 프롬프트 뒤에 지침을 붙인다. 비우면 쓰지 않는다.")
     domain_law_keys: str = Field(default="law", description="호출 인자에서 법령명을 읽을 키(쉼표 구분).")
     domain_heading: str = Field(default="\n\n## 분야 지침 — {name}\n{body}", description="분야 지침을 붙이는 꼴.")
+    states_dir: str = Field(
+        default="", description="상태 지침 폴더(AGENT_DIR 기준). 파일 머리의 '도구:'·'결과키:'·'결과상태:' 줄과 '---' 아래 지침 — "
+        "조회 결과가 그 조건에 맞으면(도구가 그 가운데 하나이고, 결과 facts 에 그 키가 하나라도 있고, status 가 그 값) 그 결과 "
+        "뒤에 지침을 한 번 붙인다. 조건이 하나도 없는 파일은 쓰지 않는다. 비우면 쓰지 않는다.")
+    state_heading: str = Field(default="[이 결과를 읽는 법 — {name}]\n{body}", description="상태 지침을 붙이는 꼴.")
     story_forms_dir: str = Field(
         default="", description="설명틀 디렉터리(AGENT_DIR 기준). 파일(*.txt)마다 첫 줄은 고르는 기준, 나머지는 쓰는 법. "
         "정하면 retell_as_story 에 form 인자(파일 이름 중 하나)를 주고, 고른 틀을 지시문의 {설명틀}·{설명틀_쓰는법}에 채운다.")

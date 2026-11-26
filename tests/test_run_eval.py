@@ -18,7 +18,7 @@ def _task(answer):
 def test_hallucination_not_excused_by_longer_number():
     rows = [{"refs": [["시행령", "별표 17 제2호"]], "texts": ""}]
     r = run_eval.evaluate(_case(), _task("별표 1 에 따르면"), rows)
-    assert r["halluc_candidates"] == ["별표 1"]
+    assert r["halluc_candidates"] == ["별표1"]     # 후보는 공백을 뺀 꼴로 모은다
 
 
 def test_recall_prefix_respects_boundary():

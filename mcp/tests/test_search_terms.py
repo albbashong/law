@@ -40,3 +40,12 @@ def test_law_term_results_lead_when_the_plain_word_matches_nothing(store):
     # 줄인 꼴이 든 조문이 없으면 그 검색 결과는 다른 낱말만 맞은 것 — 법령 용어로 찾은 것을 앞에 둔다
     r = run_law_search(store, "도시관리계획 기준", scope="law")
     assert "도시ㆍ군관리계획" in r["facts"]["결과"][0]["title"]
+
+
+def test_query_words_keep_nouns_whole_and_drop_only_particles():
+    # 조사 목록으로 끝을 떼면 명사가 잘렸다(건축허가 → 건축허, 진입로 → 진입, 어린이 → 어린) — 형태소 분석으로 뗀다
+    from law_mcp.tools.search import _query_words
+    assert _query_words("건축허가 대상") == ["건축허가", "대상"]
+    assert _query_words("건축허가를 받으려면")[0] == "건축허가"
+    assert _query_words("용도지역에서의 건폐율은") == ["용도지역", "건폐율"]
+    assert _query_words("고속도로 진입로 어린이 환경영향평가") == ["고속도로", "진입로", "어린이", "환경영향평가"]

@@ -39,20 +39,46 @@ def _heads(text: str) -> list[tuple[int, int, str]]:
     return out
 
 
+TITLE_NO = re.compile(r"별\s*표\s*(\d+)(?:\s*의\s*(\d+))?")
+
+
+def _own_no(no: str, branch: str | None, title: str | None, heads: list) -> str | None:
+    """이 행이 별표 하나만 담았다면 그 번호 — 본문 맨 앞 머리말, 없으면 목록 제목이 이르는 하나의 번호."""
+    if len(heads) == 1:
+        return heads[0][2]
+    named = TITLE_NO.findall(title or "")
+    return _no(*named[0]) if len(named) == 1 else None
+
+
 def normalize_annexes(rows, doc_name: str = ""):
-    """[(no, branch, title, text)] → [(번호, 제목, 텍스트)]."""
-    out = []
+    """[(no, branch, title, text)] → [(번호, 제목, 텍스트)] — 번호마다 하나.
+
+    목록의 no 는 올린 순번이라 별표 번호와 다를 수 있다 — 번호는 본문 머리말, 목록 제목 순으로 읽고 둘 다 없을 때만 쓴다.
+    다른 행이 따로 가진 별표의 번호는 이 행에서 머리말로 보지 않는다(본문 속 '(별표 2)의 기준' 같은 인용).
+    같은 번호가 두 번 나오면 본문이 긴 쪽 하나만 둔다.
+    """
+    read = []
     for no, branch, title, text in rows:
         heads = _heads(text) if text else []
+        at_top = [h for h in heads if not text[:h[0]].strip()]
+        read.append((no, branch, title, text, heads, _own_no(no, branch, title, at_top[:1] if len(heads) == 1 else [])))
+    out = []
+    for i, (no, branch, title, text, heads, own) in enumerate(read):
+        elsewhere = {r[5] for j, r in enumerate(read) if j != i and r[5]}
+        heads = [h for k, h in enumerate(heads) if h[2] not in elsewhere or (k == 0 and not text[:h[0]].strip())]
         if not heads or (len(heads) == 1 and text[:heads[0][0]].strip()):
-            out.append((_no(no, branch), title, text))       # 머리말이 없거나 맨 앞이 아니면 목록대로
+            out.append((own or _no(no, branch), title, text))       # 머리말이 없거나 맨 앞이 아니면 제목·목록대로
             continue
         if len(heads) == 1:
             listed = BARE.sub("", title or "")
             hno, head_end = heads[0][2], heads[0][1]
             out.append((hno, title if len(listed) >= 4 else (_title(text, head_end, doc_name) or title), text))
             continue
-        for i, (start, head_end, hno) in enumerate(heads):
-            seg = text[start:heads[i + 1][0] if i + 1 < len(heads) else len(text)]
+        for k, (start, head_end, hno) in enumerate(heads):
+            seg = text[start:heads[k + 1][0] if k + 1 < len(heads) else len(text)]
             out.append((hno, _title(seg, head_end - start, doc_name) or title, seg))
-    return out
+    best: dict[str, tuple] = {}
+    for row in out:
+        if row[0] not in best or len(row[2] or "") > len(best[row[0]][2] or ""):
+            best[row[0]] = row
+    return list(best.values())

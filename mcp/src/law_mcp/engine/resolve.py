@@ -2,13 +2,6 @@
 import difflib
 import re
 
-SIDO_SHORT = {
-    "서울": "서울특별시", "부산": "부산광역시", "대구": "대구광역시", "인천": "인천광역시",
-    "광주": "광주광역시", "대전": "대전광역시", "울산": "울산광역시", "세종": "세종특별자치시",
-    "경기": "경기도", "강원": "강원특별자치도", "충북": "충청북도", "충남": "충청남도",
-    "전북": "전북특별자치도", "전남": "전라남도", "경북": "경상북도", "경남": "경상남도",
-    "제주": "제주특별자치도",
-}
 _SUFFIX = re.compile(r"\s*(시행령|시행규칙)$")
 _names_cache: dict = {}
 
@@ -103,7 +96,25 @@ def parse_article(s: str) -> str | None:
     return path
 
 
-SIDO_SUFFIX = ("도", "특별시", "광역시", "특별자치시", "특별자치도")
+UNIT_ENDS = ("시", "군", "구")     # 시·군·구 — 지방자치법의 행정구역 단위
+
+
+def _dedup(rows: list[dict]) -> list[dict]:
+    return list({r["doc_id"]: r for r in reversed(rows)}.values())[::-1]
+
+
+def _sidos(store, tok: str) -> list[str]:
+    """줄여 쓴 시도 이름(경북·전남·세종시)을 데이터에 있는 시도 이름에 맞춘다 — 손으로 만든 줄임말 표를 두지 않는다.
+
+    통째로 들어 있거나, 첫 글자가 같고 글자가 순서대로 들어 있는 시도 이름(경북⊂경상북도). 행정 개편으로 이름이 바뀌어도
+    (전남 → 전남광주통합특별시, 광주 → 전남광주통합특별시·(구)광주광역시) 데이터의 이름을 따라간다.
+    """
+    def fits(name: str) -> bool:
+        bare = re.sub(r"[^가-힣]", "", name)
+        chars = iter(bare)
+        return tok in name or (bare[:1] == tok[:1] and all(c in chars for c in tok))
+    names = store.sidos()
+    return [tok] if tok in names else [n for n in names if len(tok) >= 2 and fits(n)]
 
 
 def find_region(store, region: str) -> list[dict]:
@@ -111,37 +122,35 @@ def find_region(store, region: str) -> list[dict]:
 
     "영천", "영천시", "경북 영천시", "수원시 장안구"(일반구), "세종시" 를 받는다.
     시도가 주어지면 다른 시도의 조례로는 절대 넘어가지 않는다(데이터에 없는 시도명은 없는 것으로 본다).
+    그 시도에 항목이 없는 시·군·구(지자체 조례가 없는 행정시 등)는 시도가 지역으로 올라 있을 때 시도의 조례를 쓴다.
     """
     q = re.sub(r"\s+", " ", (region or "").strip())
     if not q:
         return []
     toks = q.split(" ")
-    if toks[0] in SIDO_SHORT:
-        toks[0] = SIDO_SHORT[toks[0]]
-    if toks[0] in ("세종시", "세종"):
-        toks[0] = "세종특별자치시"
-    sido = toks[0] if toks[0].endswith(SIDO_SUFFIX) and len(toks[0]) > 2 else None
-    rest = toks[1:] if sido else toks
-    if sido and rest and not store.sido_known(sido):
-        sido = None     # 데이터에 없는 시도명(통합·개편 전 이름 등) — 시군구로만 찾는다
-    names = []
-    if rest:
-        names.append(" ".join(rest))
+
+    def names(rest: list[str]) -> list[str]:
+        out = [" ".join(rest)]
         if len(rest) >= 2 and rest[-1].endswith("구") and rest[-2].endswith("시"):
-            names.append(rest[-2])          # 일반구 → 그 시의 조례
-        names.append(rest[-1])
-    tries = ([f"{sido} {n}" for n in names] + names) if sido else names
-    if sido and not rest:
-        tries = [sido]
-    for t in dict.fromkeys(tries):
-        rows = store.region_plan(t)
-        if sido:
-            rows = [r for r in rows if r["sido"] == sido]
-        if rows:
-            seen, out = set(), []
-            for r in rows:
-                if r["doc_id"] not in seen:
-                    seen.add(r["doc_id"])
-                    out.append(r)
-            return out
-    return []
+            out.append(rest[-2])            # 일반구 → 그 시의 조례
+        return list(dict.fromkeys(out + [rest[-1]]))
+
+    def first(tries: list[str], sido: str | None = None) -> list[dict]:
+        for t in tries:
+            rows = [r for r in store.region_plan(t) if sido is None or r["sido"] == sido]
+            if rows:
+                return rows
+        return []
+
+    if len(toks) == 1:      # 지역 이름 그대로인 것과, 시도 이름(줄임)으로 읽은 것
+        return _dedup(store.region_plan(q) + [r for s in _sidos(store, q) for r in first([s], s)])
+    found, sidos = [], _sidos(store, toks[0])
+    for sido in sidos:
+        rest = toks[1:]
+        rows = first([f"{sido} {n}" for n in names(rest)] + names(rest), sido)
+        if not rows and rest[-1].endswith(UNIT_ENDS):
+            rows = first([sido], sido)
+        found += rows
+    if found or (sidos and not store.region_plan(toks[0])):
+        return _dedup(found)        # 시도가 주어졌으면 그 밖에서 찾지 않는다 — 첫 말이 시군구 이름이기도 할 때만 아래로
+    return _dedup(first(names(toks)))

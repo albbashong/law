@@ -143,8 +143,11 @@ def shape_result(
     answer: str,
     tool_results: Mapping[str, Any],
     usage: Mapping[str, int] | None = None,
+    clarify: bool = True,
 ) -> dict[str, Any]:
     """상위가 읽는 최상위 키를 채운다.
+
+    `clarify=False` 면 도구 결과의 되묻기 상태를 보지 않는다 — 루프가 이미 답으로 끝냈다고 정한 턴이다.
 
     `actions` 는 **모든** 도구 결과에서 모아 이어붙인다. 어느 도구가 지도 명령을
     내는지 이 코드는 모른다 — 도구가 `actions` 키로 밝히면 그대로 올린다. 아무 도구도
@@ -153,9 +156,9 @@ def shape_result(
     `usage` 가 안 넘어오면 0 으로 채운다 — 자리 자체를 비우지 않는다. 상위가
     비용을 합산할 때 키가 없으면 그 호출만 조용히 0 이 아니라 누락이 된다.
     """
-    clarify = clarify_source(tool_results)
-    if clarify is not None:
-        _, source = clarify
+    asking = clarify_source(tool_results) if clarify else None
+    if asking is not None:
+        _, source = asking
         status = "clarify"
         candidates = project_candidates(_candidates_of(source), settings.candidate_id_names())
         resolve: dict[str, Any] | None = resolve_view(source)

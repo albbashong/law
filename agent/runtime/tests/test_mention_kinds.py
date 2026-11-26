@@ -58,3 +58,23 @@ async def test_name_found_in_the_answer_is_not_sent_back(monkeypatch):
     model = Model([CALL, {"answer": "농지법 제34조의 전용허가와 별표 17을 확인하세요."}])
     raw = await loop.run_query("주택 돼?", mcp=Mcp([REVIEW, ARTICLE]), model=model)
     assert len(model.seen) == 2 and "함께 확인할 것" not in raw["answer"]
+
+
+# ── 검사마다 되돌림 기회가 따로 있다 (전수조사 S3) ─────────────────────────────────────────────
+async def test_a_mention_retry_does_not_spend_the_citation_retry(monkeypatch):
+    # 첫 답은 이름만 빠졌고, 고쳐 쓴 답이 조회하지 않은 조문을 지어냈다 — 예전엔 기회를 이미 써서 꼬리표만 달고 나갔다
+    _texts(monkeypatch)
+    monkeypatch.setattr(settings, "answer_cite_pattern", r"제\s*\d+\s*조")
+    model = Model([CALL, {"answer": "자연녹지지역입니다."},
+                   {"answer": "개발제한구역이고 제99조를 보세요."},
+                   {"answer": "개발제한구역입니다."}])
+    raw = await loop.run_query("주택 돼?", mcp=Mcp(["개발제한구역"]), model=model)
+    assert "제99조" in model.seen[3][-1]["content"]
+    assert raw["answer"].startswith("개발제한구역입니다.") and raw["ungrounded"] == []
+
+
+async def test_the_same_check_is_not_sent_back_twice(monkeypatch):
+    _texts(monkeypatch)
+    model = Model([CALL, {"answer": "자연녹지지역입니다."}, {"answer": "자연녹지지역입니다."}])
+    raw = await loop.run_query("주택 돼?", mcp=Mcp([REVIEW]), model=model)
+    assert len(model.seen) == 3 and raw["stopped"] == "answer"

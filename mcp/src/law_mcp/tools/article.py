@@ -1,4 +1,5 @@
 """조문·별표 조회 + 상위/하위 근거 체인."""
+import re
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -8,14 +9,19 @@ from law_mcp.engine.facts import excerpt, fit, pack, size
 from law_mcp.engine.structure import leads, structure
 from law_mcp.engine.follow import deemed_items, follow, node
 from law_mcp.engine.resolve import close_name, find_doc, find_region, name_key, parse_article, strip_law, suggest
-from law_mcp.tools.common import READ_ONLY, candidates_result, result, trace
+from law_mcp.tools.common import OMITTED, READ_ONLY, candidates_result, omitted, result, trace
 
-ORIGINAL_MAX = 2500
+WITH_REGION = re.compile(r"^(.*\S)\s*\(([^()]+)\)$")     # "고성군 건축 조례 (경상남도 고성군)"
 
 
 def resolve_doc(store, law: str):
     """(doc 또는 None, 실패/되묻기 결과 또는 None)"""
     docs = find_doc(store, law)
+    labeled = WITH_REGION.match((law or "").strip()) if not docs else None
+    if labeled:       # 되묻기에서 고른 "조례 이름 (지자체)"
+        picked = [d for d in find_doc(store, labeled.group(1)) if d["org"] == labeled.group(2).strip()]
+        if len(picked) == 1:
+            return {**picked[0], "지자체": picked[0]["org"]}, None
     if not docs:
         s = get_settings()
         fixed = close_name(store, law, s.law_name_fix_ratio, s.law_name_fix_margin)
@@ -25,6 +31,10 @@ def resolve_doc(store, law: str):
         return None, result("failed", {"제안": suggest(store, law)},
                             f"'{law}' 법령·조례를 찾지 못했습니다. 정식 명칭이나 제안 목록의 이름으로 다시 호출하세요.")
     exact = [d for d in docs if d["name_key"] == name_key(law) or len(docs) == 1]
+    if len({d["org"] for d in exact if d["source"] == "ordin"}) > 1:
+        # 다른 지자체에 같은 이름의 조례가 있다 — 먼저 나온 것을 조용히 고르지 않고, 지자체를 붙인 이름으로 되묻는다
+        rows = [{**d, "label": f"{d['name']} ({d['org']})"} for d in exact]
+        return None, candidates_result("법령", rows, "label", f"'{law}'은(는) 여러 지자체에 있습니다. 하나를 골라 주세요.")
     if exact:
         return exact[0], None
     names = {d["name"] for d in docs}
@@ -73,8 +83,13 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     if not path.startswith("별표") and "/" in path:   # 항·호는 자기 줄만 저장돼 있다 — 하위 호·목까지 잇는다
         body = "\n".join(u["text"] or "" for u in store.units_with_prefix(doc["doc_id"], path)) or body
     facts = {"법령": doc["name"], "조문": start.article, "제목": start.title,
-             "원문": excerpt(body, ORIGINAL_MAX),
+             "원문": excerpt(body, s.original_max_chars),
              "호출인자": {"law": doc["name"], "article": start.article}}   # 검색 결과와 같은 모양 — 이 조문 자신
+    if not facts["원문"] or len(facts["원문"]) < len(excerpt(body, len(body) + 1)):
+        omitted(facts, "원문", f"원문 {len(excerpt(body, len(body) + 1))}자 중 앞 {len(facts['원문'])}자만 실었습니다."
+                               " 뒤쪽은 항·호·목(별표는 항목) 단위로 좁혀 다시 여세요.")
+    if doc.get("지자체"):
+        facts["지자체"] = doc["지자체"]
     if doc.get("보정전"):
         facts["법령명_보정"] = f"'{doc['보정전']}'이라는 법령은 없어, 이름이 가장 가까운 '{doc['name']}'으로 조회했습니다."
     if not path.startswith("별표") and "/" in path:   # 호·목은 딸린 항의 문장(적용 대상·요건)과 함께 읽는다
@@ -116,6 +131,8 @@ def run_law_article(store, law: str, article: str, region: str | None = None,
     fit(facts, s.facts_max_chars)
     msg = (f"{doc['name']} {start.article} 원문과 연결된 근거 {len(refs)}건입니다."
            " 더_볼_연결이 남아 있으면 law_article로 이어서 조회하세요.")
+    if OMITTED in facts:
+        msg += f" {OMITTED}에 적힌 것은 이 결과에 싣지 못한 부분입니다."
     return result("partial" if not refs and r.more else "ok", facts, msg)
 
 

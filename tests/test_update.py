@@ -55,7 +55,7 @@ def test_build_skips_superseded_versions(tmp_path, monkeypatch):
     st.db.commit()
     fetch_lawdata.Store("law")
     monkeypatch.setattr(build, "DATA", tmp_path / "data")
-    assert [r["mst"] for _, r in build._load_sources(None)] == ["1"]
+    assert [r["mst"] for _, r in build._load_sources(None)[0]] == ["1"]
 
 
 def _xml(units):

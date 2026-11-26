@@ -97,3 +97,30 @@ async def test_still_ungrounded_is_marked_in_answer_when_configured(monkeypatch)
     model = FakeModel([{"tool": "law", "args": {}}, {"answer": "제14조"}, {"answer": "제14조입니다"}])
     raw = await loop.run_query("건폐율", mcp=FakeMcp(), model=model)
     assert raw["answer"] == "제14조입니다\n\n※ 확인되지 않은 인용: 제14조"
+
+
+# ── 검증은 모델에게 보인 잘린 글이 아니라 원본 결과로 한다 (전수조사 S8) ─────────────────────────
+class BigMcp(FakeMcp):
+    """결과가 TOOL_RESULT_MAX_CHARS 를 넘는다 — 뒤쪽 조문(제99조)과 '열어 볼 목록'(제77조)은 잘린 글에 없다."""
+    async def call(self, name, args):
+        return {"status": "ok", settings.pointer_key: ["열어볼것"],
+                "facts": {"열어볼것": ["제77조"], "채움": "가" * 400, "refs": [{"article": "제99조"}]}}
+
+
+async def test_citation_in_the_cut_off_part_of_a_result_is_still_grounded(monkeypatch):
+    monkeypatch.setattr(settings, "answer_cite_pattern", CITE)
+    monkeypatch.setattr(settings, "tool_result_max_chars", 200)
+    model = FakeModel([{"tool": "law", "args": {}}, {"answer": "제99조를 보세요."}])
+    raw = await loop.run_query("건폐율", mcp=BigMcp(), model=model)
+    assert raw["ungrounded"] == [] and len(model.seen) == 2
+
+
+async def test_pointer_list_of_a_cut_result_is_still_not_evidence(monkeypatch):
+    monkeypatch.setattr(settings, "answer_cite_pattern", CITE)
+    monkeypatch.setattr(settings, "tool_result_max_chars", 2000)     # 잘리지 않을 때와 같은 판정이어야 한다
+    model = FakeModel([{"tool": "law", "args": {}}, {"answer": "제77조"}, {"answer": "제77조입니다"}])
+    whole = (await loop.run_query("건폐율", mcp=BigMcp(), model=model))["ungrounded"]
+    monkeypatch.setattr(settings, "tool_result_max_chars", 200)      # 잘려서 JSON 이 깨진다
+    model = FakeModel([{"tool": "law", "args": {}}, {"answer": "제77조"}, {"answer": "제77조입니다"}])
+    cut = (await loop.run_query("건폐율", mcp=BigMcp(), model=model))["ungrounded"]
+    assert whole == cut == ["제77조"]

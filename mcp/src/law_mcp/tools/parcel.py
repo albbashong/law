@@ -6,7 +6,7 @@ from pydantic import Field
 
 from law_mcp.clients.vworld import AddressNotFound, Client, VworldUnavailable
 from law_mcp.config import get_settings
-from law_mcp.tools.common import READ_ONLY, result, trace
+from law_mcp.tools.common import READ_ONLY, capped, result, trace
 
 _client: dict = {}
 
@@ -116,8 +116,9 @@ def run_parcel_zoning(address: str, lookup=None, store=None) -> dict:
     except VworldUnavailable as e:
         return result("failed", {"오류": str(e)[:200]},
                       "브이월드 필지 조회에 실패했습니다. 시군구와 용도지역을 직접 알려 주면 법령 근거는 찾을 수 있습니다.")
-    facts = {"주소": p.address, "pnu": p.pnu, "시도": p.sido, "시군구": p.sigungu, "용도지역": p.zones,
-             "기타규제": p.others[:12], "지목": p.land_category, "면적": p.area}
+    facts = {"주소": p.address, "pnu": p.pnu, "시도": p.sido, "시군구": p.sigungu, "용도지역": p.zones}
+    capped(facts, "기타규제", p.others, get_settings().parcel_regulations_max, name=str)
+    facts |= {"지목": p.land_category, "면적": p.area}
     if p.road_side:   # 토지특성 조사 분류 — 접한 길이·도로 지정 여부는 담지 않는다
         facts["도로접면"] = p.road_side
     if p.legal_dong:
@@ -140,6 +141,7 @@ def register(mcp, get_store):
     ) -> dict:
         """이 땅 용도지역이 뭐야? 농지전용 받아야 해? — 주소로 용도지역·지목·면적·규제와 전용허가 근거를 확인한다.
 
+        지으려는 것 없이 땅 자체(용도지역·지목·전용허가 필요 여부)만 물을 때 쓴다.
         건축 근거까지 필요하면 building_basis 에 address 를 바로 넘기는 편이 한 번에 끝난다.
         """
         return trace("parcel_zoning", dict(address=address), run_parcel_zoning(address, store=get_store()))

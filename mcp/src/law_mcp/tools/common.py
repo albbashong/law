@@ -14,6 +14,21 @@ def result(status: str, facts: dict, message: str, steps: list | None = None) ->
     return {"status": status, "facts": facts, "message": message, "steps": steps or []}
 
 
+OMITTED = "생략"     # 잘라 낸 것을 적는 facts 키 — 조용히 줄이지 않는다
+
+
+def omitted(facts: dict, key: str, note: str) -> None:
+    facts.setdefault(OMITTED, {})[key] = note
+
+
+def capped(facts: dict, key: str, items: list, n: int, name=None) -> None:
+    """목록을 n 개까지만 싣고, 더 있으면 생략에 남긴다. name 을 주면 빠진 것의 이름도 적는다."""
+    facts[key] = items[:n]
+    if len(items) > n:
+        rest = f" — 빠진 것: {', '.join(name(x) for x in items[n:])}" if name else ""
+        omitted(facts, key, f"{len(items)}건 중 {n}건만 실었습니다{rest}")
+
+
 def candidates_result(kind: str, rows: list[dict], label_key: str, message: str) -> dict:
     cands = [{"id": str(r.get("doc_id")), "label": r[label_key]} for r in rows[:8]]
     return result("needs_disambiguation", {"candidates": cands, "대상": kind}, message)
